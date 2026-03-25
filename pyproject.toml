@@ -1,0 +1,51 @@
+[project]
+name = "AML-Assignment-2"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "loguru>=0.7.3",
+  "matplotlib>=3.10.8",
+  "numpy>=2.4.2",
+  "pandas>=3.0.1",
+  "scikit-learn>=1.8.0",
+  "scipy>=1.17.1",
+  "tqdm>=4.67.3",
+]
+
+[project.optional-dependencies]
+cpu = [
+  "torch>=2.10.0",
+  "torchvision>=0.25.0"
+]
+cu126 = [
+  "torch>=2.10.0",
+  "torchvision>=0.25.0"
+]
+
+[tool.uv]
+conflicts = [
+  [
+    { extra = "cpu" },
+    { extra = "cu126" },
+  ],
+]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu126", extra = "cu126" },
+]
+torchvision = [
+  { index = "pytorch-cpu", extra = "cpu" },
+  { index = "pytorch-cu126", extra = "cu126" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
