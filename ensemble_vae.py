@@ -18,7 +18,7 @@ import math
 import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
-
+import numpy as np
 # Parse arguments
 import argparse
 
@@ -75,7 +75,7 @@ class GaussianEncoder(nn.Module):
 class GaussianDecoder(nn.Module):
     def __init__(self, decoder_net):
         """
-        Define a Bernoulli decoder distribution based on a given decoder network.
+        Define a Gaussian decoder distribution based on a given decoder network.
 
         Parameters:
         encoder_net: [torch.nn.Module]
@@ -85,7 +85,6 @@ class GaussianDecoder(nn.Module):
         """
         super(GaussianDecoder, self).__init__()
         self.decoder_net = decoder_net
-        # self.std = nn.Parameter(torch.ones(28, 28) * 0.5, requires_grad=True) # In case you want to learn the std of the gaussian.
 
     def forward(self, z):
         """
@@ -95,8 +94,10 @@ class GaussianDecoder(nn.Module):
         z: [torch.Tensor]
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
-        means = self.decoder_net(z)
-        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
+        means, stds = torch.chunk(self.decoder_net(z), 2, dim=1)
+        
+        return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
+
 
 
 class VAE(nn.Module):
@@ -191,7 +192,7 @@ def train(model, optimizer, data_loader, epochs, device):
                 x = noise(x.to(device))
                 model = model
                 optimizer.zero_grad()
-                # from IPython import embed; embed()
+
                 loss = model(x)
                 loss.backward()
                 optimizer.step()
@@ -231,34 +232,36 @@ class PLcurve:
 
     def plot(self):
         c = self.points().detach().numpy()
-        plt.plot(c[:,0], c[:,1])
+        plt.plot(c[:,0], c[:,1], color='k', alpha=0.2)
     
 
 
-def curve_energy(metric, curve):
-    """
-    Taken from exercise solutions:
-    """
-    G = metric(curve[:-1]) # (N -1) xDxD
-    delta = curve[1:]-curve[:-1] # (N -1) xD
-    tmp = torch.bmm(G,delta.unsqueeze(-1)).squeeze(-1) # (N -1) xD
-    energy = torch.sum(delta*tmp)
+def curve_energy(model,curve):
+
+    curve_points = curve.points().to(device)
+    q = model.decoder(curve_points)
+    pos_mean, pos_std = q.mean, q.stddev
+
+    delta = pos_mean[1:] - pos_mean[:-1]
+    energy = torch.sum(delta**2)
+
     return energy
 
 
-def connecting_geodesic(metric, curve):
-    opt = optim.LBFGS([curve.params], lr=0.5)
+def connecting_geodesic(model, curve):
+    opt = optim.LBFGS([curve.params]
+                      , lr=0.5
+                      , max_iter=100
+                      , line_search_fn='strong_wolfe')
     
     def closure():
         opt.zero_grad()
-        energy = curve_energy(metric, curve.points())
+        energy = curve_energy(model, curve)
         energy.backward()
         return energy
         
-    max_iter = 1000
-    for i in range(max_iter):
-        opt.zero_grad()
-        opt.step(closure)
+    opt.zero_grad()
+    opt.step(closure)
 
 def encode_data_to_latent_space(model, mnist_data_loader):
     with torch.no_grad():
@@ -268,7 +271,7 @@ def encode_data_to_latent_space(model, mnist_data_loader):
         pos_means = []
         pos_stds = []
 
-        data_iter = iter(mnist_test_loader)
+        data_iter = iter(mnist_data_loader)
         for batch in data_iter:
             x, y = batch[0].to(device), batch[1].to(device)
 
@@ -291,9 +294,9 @@ def encode_data_to_latent_space(model, mnist_data_loader):
         ys = torch.concatenate(ys, axis=0)
         pos_means = torch.concatenate(pos_means, axis=0)
         pos_stds = torch.concatenate(pos_stds, axis=0)
-        return latent_vars, ys
+        return latent_vars, ys, pos_means, pos_stds
 
-def plot_latent_space(latent_vars, ys, curve=None, save=False):
+def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png'):
     plt.figure(figsize=(16, 12))
     scatter = plt.scatter(latent_vars[:, 0], latent_vars[:, 1], c=ys, alpha=0.6, cmap="tab10")
     handles, labels = scatter.legend_elements(prop="colors", alpha=0.6)
@@ -301,8 +304,44 @@ def plot_latent_space(latent_vars, ys, curve=None, save=False):
     if curve is not None:
         curve.plot()
     if save:
-        plt.savefig("latent_space_" + args.samples)
+        plt.savefig("latent_space_" + plot_name)
+
+def plot_latent_curves(model, latent_vars, num_curves):
+    # sample 2*num_curves random points
     
+    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=False)
+    rd_points = rd_points.reshape(2, num_curves)
+
+    for i in tqdm(range(num_curves)):
+        rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1,i]
+        x0 = torch.tensor(latent_vars[rd_idx_1,:])
+        x1 = torch.tensor(latent_vars[rd_idx_2,:])
+
+        c = PLcurve(x0, x1, 100)
+        
+        connecting_geodesic(model, c) 
+        c.plot() 
+
+def plot_latent_pixel_uncertainty(model, latent_vars):
+    n_grid_points = 100
+    z1_max, z2_max = np.max(latent_vars, axis=0)
+    z1_min, z2_min = np.min(latent_vars, axis=0)
+    z1 = np.linspace(z1_min, z1_max, num=n_grid_points) # Nx1
+    z2 = np.linspace(z2_min, z2_max, num=n_grid_points) # Nx1
+    zz1, zz2 = np.meshgrid(z1,z2) # NxN, NxN
+
+    zz1_tensor = torch.tensor(zz1.flatten()).reshape(-1,1) # (N^2)x1
+    zz2_tensor = torch.tensor(zz2.flatten()).reshape(-1,1) # (N^2)x1
+    zz = torch.concatenate([zz1_tensor, zz2_tensor], axis=1) # (N^2)x2
+    
+    q = model.decoder(zz.to(device))
+    stddev_means = torch.mean(q.stddev, dim=(1,2,3))
+    stddev_means_grid = stddev_means.reshape(n_grid_points, n_grid_points).detach().cpu().numpy()
+    heatmap = plt.contourf(zz1, zz2, stddev_means_grid, levels=100, cmap='viridis', alpha=0.3)
+    cbar = plt.colorbar(heatmap)
+    cbar.set_label('Standard deviation of pixel values')
+
+
 
 if __name__ == "__main__":
 
@@ -390,7 +429,7 @@ if __name__ == "__main__":
         print(key, "=", value)
 
     device = args.device
-
+    num_curves = args.num_curves
     # Load a subset of MNIST and create data loaders
     def subsample(data, targets, num_data, num_classes):
         idx = targets < num_classes
@@ -401,6 +440,7 @@ if __name__ == "__main__":
 
     num_train_data = 2048
     num_classes = 3
+
     train_tensors = datasets.MNIST(
         "data/",
         train=True,
@@ -456,7 +496,7 @@ if __name__ == "__main__":
             nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
             nn.Softmax(),
             nn.BatchNorm2d(16),
-            nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(16, 2, 3, stride=2, padding=1, output_padding=1),
         )
         return decoder_net
 
@@ -536,15 +576,13 @@ if __name__ == "__main__":
         if M > 2:
             raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
 
-        latent_vars, ys = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
+        latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
         latent_vars, ys = latent_vars.cpu().numpy(), ys.cpu().numpy()
-
-        x0 = torch.tensor(latent_vars[0,:])
-        x1 = torch.tensor(latent_vars[220,:])
-        c = PLcurve(x0, x1, 10)
-
-        plot_latent_space(latent_vars=latent_vars, ys=ys, curve=c, save=True)
         
-
-
-
+        plot_latent_space(latent_vars=latent_vars, ys=ys, save=False)
+        plot_latent_pixel_uncertainty(model, latent_vars)
+        plot_latent_curves(model, latent_vars, num_curves)
+        
+        plt.tight_layout()
+        plt.savefig(f"geodesics_{num_curves}_curves.png")
+        
