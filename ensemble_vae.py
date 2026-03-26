@@ -157,6 +157,26 @@ class VAE(nn.Module):
            A tensor of dimension `(batch_size, feature_dim1, feature_dim2)`
         """
         return -self.elbo(x)
+    
+class ensamble_VAE(nn.Module):
+    """
+    Define a Variational Autoencoder (VAE) model with D decoders.
+    """
+    def __init__(self, prior, encoder, num_decoders):
+        """
+        Parameters:
+        prior: [torch.nn.Module]
+           The prior distribution over the latent space.
+        decoder: [torch.nn.Module]
+              The decoder distribution over the data space.
+        encoder: [torch.nn.Module]
+                The encoder distribution over the latent space.
+        """
+
+        super(VAE, self).__init__()
+        self.prior = prior
+        self.encoder = encoder
+        self.decoders = nn.ModuleList([GaussianDecoder(new_decoder()) for _ in range(num_decoders)])
 
 
 def train(model, optimizer, data_loader, epochs, device):
