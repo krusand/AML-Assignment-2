@@ -313,7 +313,6 @@ def curve_energy_ensemble(model, curve):
     return energy
 
 
-
 def curve_distance_ensemble(model, curve):
     curve_points = curve.points().to(device)
 
@@ -339,6 +338,21 @@ def connecting_geodesic(model, curve):
     def closure():
         opt.zero_grad()
         energy = curve_energy(model, curve)
+        energy.backward()
+        return energy
+        
+    opt.zero_grad()
+    opt.step(closure)
+
+def connecting_geodesic_ensemble(model, curve):
+    opt = optim.LBFGS([curve.params]
+                      , lr=0.5
+                      , max_iter=500
+                      , line_search_fn='strong_wolfe')
+    
+    def closure():
+        opt.zero_grad()
+        energy = curve_distance_ensemble(model, curve)
         energy.backward()
         return energy
         
@@ -681,4 +695,26 @@ if __name__ == "__main__":
         
         plt.tight_layout()
         plt.savefig(f"geodesics_{num_curves}_curves.png")
+
+    elif args.mode == "geodesics_ensemble":
+        
+        for rerun in range(args.num_reruns):
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoderEnsemble([new_decoder().to(device) for _ in range(num_decoders)]),
+                GaussianEncoder(new_encoder()),
+                num_decoders=num_decoders,
+            ).to(device)
+            model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+            model.eval()
+
+            if M > 2:
+                raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
+            
+            # select 10 pairs of random test points
+            indexes = np.random.choice(a=latent_vars.shape[0], size=10*2, replace=True)
+            _, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
+            pos_means, ys = pos_means.cpu().numpy(), ys.cpu().numpy()
+
+        
         
