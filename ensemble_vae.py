@@ -592,7 +592,7 @@ if __name__ == "__main__":
         for rerun in range(args.num_reruns):
 
             if num_decoders > 1:
-                decoder_nets = [new_decoder() for _ in range(num_decoders)]
+                decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
                 decoder = GaussianDecoderEnsemble(decoder_nets)
 
             else:
