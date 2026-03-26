@@ -114,7 +114,7 @@ class GaussianDecoderEnsemble(nn.Module):
         super(GaussianDecoderEnsemble, self).__init__()
         self.decoder_nets = decoder_nets
 
-    def forward(self, z):
+    def forward(self, z, idx):
         """
         Given a batch of latent variables, return a Gaussian distribution over the data space.
 
@@ -122,7 +122,6 @@ class GaussianDecoderEnsemble(nn.Module):
         z: [torch.Tensor]
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
-        idx = np.random.choice(len(self.decoder_nets), size=1)[0]
 
         decoder_net = self.decoder_nets[idx]
         means, stds = torch.chunk(decoder_net(z), 2, dim=1)
@@ -262,7 +261,6 @@ class PLcurve:
     def plot(self):
         c = self.points().detach().numpy()
         plt.plot(c[:,0], c[:,1], color='k', alpha=0.2)
-    
 
 
 def curve_energy(model,curve):
@@ -276,6 +274,51 @@ def curve_energy(model,curve):
 
     return energy
 
+def curve_distance(model,curve):
+
+    curve_points = curve.points().to(device)
+    q = model.decoder(curve_points)
+    pos_mean, pos_std = q.mean, q.stddev
+
+    delta = pos_mean[1:] - pos_mean[:-1]
+    energy = torch.sum(delta)
+
+    return energy
+
+
+def curve_energy_ensemble(model, curve):
+    curve_points = curve.points().to(device)
+
+    rd_idxs = np.random.choice(a=num_decoders, size=2, replace=False)
+    idx1, idx2 = rd_idxs[0], rd_idxs[1]
+
+    q1 = model.decoder(curve_points, idx1)
+    q2 = model.decoder(curve_points, idx2)
+    pos1_mean = q1.mean
+    pos2_mean = q2.mean
+
+    delta = pos1_mean[1:] - pos2_mean[:-1]
+    energy = torch.sum(delta**2)
+
+    return energy
+
+
+
+def curve_distance_ensemble(model, curve):
+    curve_points = curve.points().to(device)
+
+    rd_idxs = np.random.choice(a=num_decoders, size=2, replace=False)
+    idx1, idx2 = rd_idxs[0], rd_idxs[1]
+
+    q1 = model.decoder(curve_points, idx1)
+    q2 = model.decoder(curve_points, idx2)
+    pos1_mean = q1.mean
+    pos2_mean = q2.mean
+
+    delta = pos1_mean[1:] - pos2_mean[:-1]
+    energy = torch.sum(delta)
+
+    return energy
 
 def connecting_geodesic(model, curve):
     opt = optim.LBFGS([curve.params]
