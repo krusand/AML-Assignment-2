@@ -114,7 +114,7 @@ class GaussianDecoderEnsemble(nn.Module):
         super(GaussianDecoderEnsemble, self).__init__()
         self.decoder_nets = decoder_nets
 
-    def forward(self, z, idx):
+    def forward(self, z, idx=None):
         """
         Given a batch of latent variables, return a Gaussian distribution over the data space.
 
@@ -122,7 +122,6 @@ class GaussianDecoderEnsemble(nn.Module):
         z: [torch.Tensor]
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
-
         decoder_net = self.decoder_nets[idx]
         means, stds = torch.chunk(decoder_net(z), 2, dim=1)
         
@@ -133,7 +132,7 @@ class VAE(nn.Module):
     Define a Variational Autoencoder (VAE) model.
     """
 
-    def __init__(self, prior, decoder, encoder):
+    def __init__(self, prior, decoder, encoder, num_decoders=None):
         """
         Parameters:
         prior: [torch.nn.Module]
@@ -148,6 +147,7 @@ class VAE(nn.Module):
         self.prior = prior
         self.decoder = decoder
         self.encoder = encoder
+        self.num_decoders = num_decoders
 
     def elbo(self, x):
         """
@@ -161,13 +161,18 @@ class VAE(nn.Module):
         """
         q = self.encoder(x)
         z = q.rsample()
-
-        elbo = torch.mean(
-            self.decoder(z).log_prob(x) - q.log_prob(z) + self.prior().log_prob(z)
-        )
+        if isinstance(self.decoder, GaussianDecoderEnsemble):
+            idx = np.random.choice(self.num_decoders, size=1)[0]
+            elbo = torch.mean(
+                self.decoder(z, idx).log_prob(x) - q.log_prob(z) + self.prior().log_prob(z)
+            )
+        else:
+            elbo = torch.mean(
+                self.decoder(z).log_prob(x) - q.log_prob(z) + self.prior().log_prob(z)
+            )
         return elbo
 
-    def sample(self, n_samples=1):
+    def sample(self, n_samples=1, idx=None):
         """
         Sample from the model.
 
@@ -176,7 +181,12 @@ class VAE(nn.Module):
            Number of samples to generate.
         """
         z = self.prior().sample(torch.Size([n_samples]))
-        return self.decoder(z).sample()
+        if isinstance(self.decoder, GaussianDecoderEnsemble):
+            all_samples = self.decoder(z, idx).sample()
+        else:
+            all_samples = self.decoder(z).sample()
+
+        return all_samples
 
     def forward(self, x):
         """
@@ -579,25 +589,35 @@ if __name__ == "__main__":
         experiments_folder = args.experiment_folder
         os.makedirs(f"{experiments_folder}", exist_ok=True)
 
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        train(
-            model,
-            optimizer,
-            mnist_train_loader,
-            args.epochs_per_decoder,
-            args.device,
-        )
-        os.makedirs(f"{experiments_folder}", exist_ok=True)
+        for rerun in range(args.num_reruns):
 
-        torch.save(
-            model.state_dict(),
-            f"{experiments_folder}/model.pt",
-        )
+            if num_decoders > 1:
+                decoder_nets = [new_decoder() for _ in range(num_decoders)]
+                decoder = GaussianDecoderEnsemble(decoder_nets)
+
+            else:
+                decoder = GaussianDecoder(new_decoder())
+
+            model = VAE(
+                GaussianPrior(M),
+                decoder,
+                GaussianEncoder(new_encoder()),
+                num_decoders=num_decoders,
+            ).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+            train(
+                model,
+                optimizer,
+                mnist_train_loader,
+                args.epochs_per_decoder * num_decoders,
+                args.device,
+            )
+            os.makedirs(f"{experiments_folder}", exist_ok=True)
+
+            torch.save(
+                model.state_dict(),
+                f"{experiments_folder}/model_{rerun}.pt",
+            )
 
     elif args.mode == "sample":
         
