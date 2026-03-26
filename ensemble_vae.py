@@ -97,8 +97,36 @@ class GaussianDecoder(nn.Module):
         means, stds = torch.chunk(self.decoder_net(z), 2, dim=1)
         
         return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
+class GaussianDecoderEnsemble(nn.Module):
+    def __init__(self, decoder_nets):
+        """
+        Define a Gaussian decoder distribution based on a list of decoder networks.
+        Samples a decoder randomly every forward batch.
 
+        Parameters:
+        decoder_net: list[torch.nn.Module]
+           A list of decoder networks that takes as a tensor of dim `(batch_size, M) as
+           input, where M is the dimension of the latent space, and outputs a
+           tensor of dimension (batch_size, feature_dim1, feature_dim2).
+           A single decoder should be sampled from the list
+        """
+        super(GaussianDecoderEnsemble, self).__init__()
+        self.decoder_nets = decoder_nets
 
+    def forward(self, z):
+        """
+        Given a batch of latent variables, return a Gaussian distribution over the data space.
+
+        Parameters:
+        z: [torch.Tensor]
+           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
+        """
+        idx = np.random.choice(len(self.decoder_nets), size=1)[0]
+
+        decoder_net = self.decoder_nets[idx]
+        means, stds = torch.chunk(decoder_net(z), 2, dim=1)
+        
+        return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
 
 class VAE(nn.Module):
     """
@@ -429,6 +457,8 @@ if __name__ == "__main__":
 
     device = args.device
     num_curves = args.num_curves
+    num_decoders = args.num_decoders
+
     # Load a subset of MNIST and create data loaders
     def subsample(data, targets, num_data, num_classes):
         idx = targets < num_classes
@@ -504,11 +534,19 @@ if __name__ == "__main__":
 
         experiments_folder = args.experiment_folder
         os.makedirs(f"{experiments_folder}", exist_ok=True)
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
+
+        if num_decoders > 1:
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoderEnsemble([new_decoder() for _ in range(num_decoders)]),
+                GaussianEncoder(new_encoder()),
+            ).to(device)
+        else:
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoder(new_decoder()),
+                GaussianEncoder(new_encoder()),
+            ).to(device)
         optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
         train(
             model,
@@ -525,6 +563,7 @@ if __name__ == "__main__":
         )
 
     elif args.mode == "sample":
+        
         model = VAE(
             GaussianPrior(M),
             GaussianDecoder(new_decoder()),
@@ -545,11 +584,18 @@ if __name__ == "__main__":
 
     elif args.mode == "eval":
         # Load trained model
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
+        if num_decoders > 1:
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoderEnsemble([new_decoder() for _ in range(num_decoders)]),
+                GaussianEncoder(new_encoder()),
+            ).to(device)
+        else:
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoder(new_decoder()),
+                GaussianEncoder(new_encoder()),
+            ).to(device)
         model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
         model.eval()
 
@@ -563,12 +609,18 @@ if __name__ == "__main__":
         print("Print mean test elbo:", mean_elbo)
 
     elif args.mode == "geodesics":
-
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
+        if num_decoders > 1:
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoderEnsemble([new_decoder() for _ in range(num_decoders)]),
+                GaussianEncoder(new_encoder()),
+            ).to(device)
+        else:
+            model = VAE(
+                GaussianPrior(M),
+                GaussianDecoder(new_decoder()),
+                GaussianEncoder(new_encoder()),
+            ).to(device)
         model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
         model.eval()
 
