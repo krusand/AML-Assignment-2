@@ -172,7 +172,7 @@ class VAE(nn.Module):
             )
         return elbo
 
-    def sample(self, n_samples=1):
+    def sample(self, n_samples=1, idx=None):
         """
         Sample from the model.
 
@@ -182,14 +182,7 @@ class VAE(nn.Module):
         """
         z = self.prior().sample(torch.Size([n_samples]))
         if isinstance(self.decoder, GaussianDecoderEnsemble):
-            for i in range(self.num_decoders):
-                samples = self.decoder(z, idx=i).sample()
-                if i == 0:
-                    all_samples = samples
-                else:
-                    all_samples = torch.cat((all_samples, samples), dim=0)
-            # avarage samples from all decoders
-            all_samples = torch.mean(all_samples, dim=0)
+            all_samples = self.decoder(z, idx).sample()
         else:
             all_samples = self.decoder(z).sample()
 
@@ -552,33 +545,35 @@ if __name__ == "__main__":
         experiments_folder = args.experiment_folder
         os.makedirs(f"{experiments_folder}", exist_ok=True)
 
-        if num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(num_decoders)]
-            decoder = GaussianDecoderEnsemble(decoder_nets)
+        for rerun in range(args.num_reruns):
 
-        else:
-            decoder = GaussianDecoder(new_decoder())
+            if num_decoders > 1:
+                decoder_nets = [new_decoder() for _ in range(num_decoders)]
+                decoder = GaussianDecoderEnsemble(decoder_nets)
 
-        model = VAE(
-            GaussianPrior(M),
-            decoder,
-            GaussianEncoder(new_encoder()),
-            num_decoders=num_decoders,
-        ).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-        train(
-            model,
-            optimizer,
-            mnist_train_loader,
-            args.epochs_per_decoder * num_decoders,
-            args.device,
-        )
-        os.makedirs(f"{experiments_folder}", exist_ok=True)
+            else:
+                decoder = GaussianDecoder(new_decoder())
 
-        torch.save(
-            model.state_dict(),
-            f"{experiments_folder}/model.pt",
-        )
+            model = VAE(
+                GaussianPrior(M),
+                decoder,
+                GaussianEncoder(new_encoder()),
+                num_decoders=num_decoders,
+            ).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+            train(
+                model,
+                optimizer,
+                mnist_train_loader,
+                args.epochs_per_decoder * num_decoders,
+                args.device,
+            )
+            os.makedirs(f"{experiments_folder}", exist_ok=True)
+
+            torch.save(
+                model.state_dict(),
+                f"{experiments_folder}/model_{rerun}.pt",
+            )
 
     elif args.mode == "sample":
         
