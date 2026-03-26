@@ -98,6 +98,37 @@ class GaussianDecoder(nn.Module):
         
         return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
 
+class GaussianDecoderEnsemble(nn.Module):
+    def __init__(self, decoder_nets):
+        """
+        Define a Gaussian decoder distribution based on a list of decoder networks.
+        Samples a decoder randomly every forward batch.
+
+        Parameters:
+        decoder_net: list[torch.nn.Module]
+           A list of decoder networks that takes as a tensor of dim `(batch_size, M) as
+           input, where M is the dimension of the latent space, and outputs a
+           tensor of dimension (batch_size, feature_dim1, feature_dim2).
+           A single decoder should be sampled from the list
+        """
+        super(GaussianDecoderEnsemble, self).__init__()
+        self.decoder_nets = decoder_nets
+
+    def forward(self, z):
+        """
+        Given a batch of latent variables, return a Gaussian distribution over the data space.
+
+        Parameters:
+        z: [torch.Tensor]
+           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
+        """
+        idx = np.random.choice(len(self.decoder_nets), size=1)[0]
+
+        decoder_net = self.decoder_nets[idx]
+        means, stds = torch.chunk(decoder_net(z), 2, dim=1)
+        
+        return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
+
 class VAE(nn.Module):
     """
     Define a Variational Autoencoder (VAE) model.
