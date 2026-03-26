@@ -251,7 +251,7 @@ def curve_energy(model,curve):
 def connecting_geodesic(model, curve):
     opt = optim.LBFGS([curve.params]
                       , lr=0.5
-                      , max_iter=100
+                      , max_iter=500
                       , line_search_fn='strong_wolfe')
     
     def closure():
@@ -297,8 +297,7 @@ def encode_data_to_latent_space(model, mnist_data_loader):
         return latent_vars, ys, pos_means, pos_stds
 
 def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png'):
-    plt.figure(figsize=(16, 12))
-    scatter = plt.scatter(latent_vars[:, 0], latent_vars[:, 1], c=ys, alpha=0.6, cmap="tab10")
+    scatter = plt.scatter(latent_vars[:, 0], latent_vars[:, 1], c=ys, alpha=0.9, cmap="tab10")
     handles, labels = scatter.legend_elements(prop="colors", alpha=0.6)
     legend = plt.legend(handles, range(10), title="Class Label")
     if curve is not None:
@@ -309,7 +308,7 @@ def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png
 def plot_latent_curves(model, latent_vars, num_curves):
     # sample 2*num_curves random points
     
-    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=False)
+    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=True)
     rd_points = rd_points.reshape(2, num_curves)
 
     for i in tqdm(range(num_curves)):
@@ -337,7 +336,7 @@ def plot_latent_pixel_uncertainty(model, latent_vars):
     q = model.decoder(zz.to(device))
     stddev_means = torch.mean(q.stddev, dim=(1,2,3))
     stddev_means_grid = stddev_means.reshape(n_grid_points, n_grid_points).detach().cpu().numpy()
-    heatmap = plt.contourf(zz1, zz2, stddev_means_grid, levels=100, cmap='viridis', alpha=0.3)
+    heatmap = plt.contourf(zz1, zz2, stddev_means_grid, levels=100, cmap='viridis', alpha=0.5)
     cbar = plt.colorbar(heatmap)
     cbar.set_label('Standard deviation of pixel values')
 
@@ -578,9 +577,9 @@ if __name__ == "__main__":
 
         latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
         latent_vars, ys = latent_vars.cpu().numpy(), ys.cpu().numpy()
-        
-        plot_latent_space(latent_vars=latent_vars, ys=ys, save=False)
+        plt.figure(figsize=(16, 12))
         plot_latent_pixel_uncertainty(model, latent_vars)
+        plot_latent_space(latent_vars=latent_vars, ys=ys, save=False)
         plot_latent_curves(model, latent_vars, num_curves)
         
         plt.tight_layout()
