@@ -18,6 +18,11 @@ import os
 import math
 import matplotlib.pyplot as plt
 
+from torchvision import datasets, transforms
+from torchvision.utils import save_image
+
+# Parse arguments
+import argparse
 class GaussianPrior(nn.Module):
     def __init__(self, M):
         """
@@ -197,6 +202,38 @@ class VAE(nn.Module):
            A tensor of dimension `(batch_size, feature_dim1, feature_dim2)`
         """
         return -self.elbo(x)
+
+
+def new_encoder():
+    encoder_net = nn.Sequential(
+        nn.Conv2d(1, 16, 3, stride=2, padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(16),
+        nn.Conv2d(16, 32, 3, stride=2, padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.Conv2d(32, 32, 3, stride=2, padding=1),
+        nn.Flatten(),
+        nn.Linear(512, 2 * M),
+    )
+    return encoder_net
+
+def new_decoder():
+    decoder_net = nn.Sequential(
+        nn.Linear(M, 512),
+        nn.Unflatten(-1, (32, 4, 4)),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.ConvTranspose2d(32, 32, 3, stride=2, padding=1, output_padding=0),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(16),
+        nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
+    )
+    return decoder_net
+
 
 
 def train(model, optimizer, data_loader, epochs, device):
@@ -423,12 +460,44 @@ def plot_latent_pixel_uncertainty(model, latent_vars):
     cbar = plt.colorbar(heatmap)
     cbar.set_label('Standard deviation of pixel values')
 
-if __name__ == "__main__":
-    from torchvision import datasets, transforms
-    from torchvision.utils import save_image
+    # Load a subset of MNIST and create data loaders
+def subsample(data, targets, num_data, num_classes):
+    idx = targets < num_classes
+    new_data = data[idx][:num_data].unsqueeze(1).to(torch.float32) / 255
+    new_targets = targets[idx][:num_data]
 
-    # Parse arguments
-    import argparse
+    return torch.utils.data.TensorDataset(new_data, new_targets)
+
+
+def load_data(num_train_data, num_classes):
+    train_tensors = datasets.MNIST(
+        "data/",
+        train=True,
+        download=True,
+        transform=transforms.Compose([transforms.ToTensor()]),
+    )
+    test_tensors = datasets.MNIST(
+        "data/",
+        train=False,
+        download=True,
+        transform=transforms.Compose([transforms.ToTensor()]),
+    )
+    train_data = subsample(
+        train_tensors.data, train_tensors.targets, num_train_data, num_classes
+    )
+    test_data = subsample(
+        test_tensors.data, test_tensors.targets, num_train_data, num_classes
+    )
+
+    mnist_train_loader = torch.utils.data.DataLoader(
+        train_data, batch_size=args.batch_size, shuffle=True
+    )
+    mnist_test_loader = torch.utils.data.DataLoader(
+        test_data, batch_size=args.batch_size, shuffle=False
+    )
+    return mnist_train_loader, mnist_test_loader
+
+def load_args():
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -437,6 +506,12 @@ if __name__ == "__main__":
         default="train",
         choices=["train", "sample", "eval", "geodesics"],
         help="what to do when running the script (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--model_name",
+        type=str
+        default='model'
+        help="Model name without file extension (default: %(default)s)"
     )
     parser.add_argument(
         "--experiment-folder",
@@ -508,94 +583,40 @@ if __name__ == "__main__":
         help="number of points along the curve (default: %(default)s)",
     )
 
+    return parser
+
+
+if __name__ == "__main__":
+    
+    parser = load_args()
     args = parser.parse_args()
     print("# Options")
     for key, value in sorted(vars(args).items()):
         print(key, "=", value)
 
     device = args.device
-
-    # Load a subset of MNIST and create data loaders
-    def subsample(data, targets, num_data, num_classes):
-        idx = targets < num_classes
-        new_data = data[idx][:num_data].unsqueeze(1).to(torch.float32) / 255
-        new_targets = targets[idx][:num_data]
-
-        return torch.utils.data.TensorDataset(new_data, new_targets)
+    experiment_folder = args.experiment_folder
+    M = args.latent_dim
+    num_decoders = args.num_decoders
+    epochs_per_decoder = args.epochs_per_decoder
+    model_name = args.model_name
 
     num_train_data = 2048
     num_classes = 3
-    train_tensors = datasets.MNIST(
-        "data/",
-        train=True,
-        download=True,
-        transform=transforms.Compose([transforms.ToTensor()]),
-    )
-    test_tensors = datasets.MNIST(
-        "data/",
-        train=False,
-        download=True,
-        transform=transforms.Compose([transforms.ToTensor()]),
-    )
-    train_data = subsample(
-        train_tensors.data, train_tensors.targets, num_train_data, num_classes
-    )
-    test_data = subsample(
-        test_tensors.data, test_tensors.targets, num_train_data, num_classes
-    )
-
-    mnist_train_loader = torch.utils.data.DataLoader(
-        train_data, batch_size=args.batch_size, shuffle=True
-    )
-    mnist_test_loader = torch.utils.data.DataLoader(
-        test_data, batch_size=args.batch_size, shuffle=False
-    )
-
-    # Define prior distribution
-    M = args.latent_dim
-
-    def new_encoder():
-        encoder_net = nn.Sequential(
-            nn.Conv2d(1, 16, 3, stride=2, padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(16),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.Conv2d(32, 32, 3, stride=2, padding=1),
-            nn.Flatten(),
-            nn.Linear(512, 2 * M),
-        )
-        return encoder_net
-
-    def new_decoder():
-        decoder_net = nn.Sequential(
-            nn.Linear(M, 512),
-            nn.Unflatten(-1, (32, 4, 4)),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.ConvTranspose2d(32, 32, 3, stride=2, padding=1, output_padding=0),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(16),
-            nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
-        )
-        return decoder_net
+    mnist_train_loader, mnist_test_loader = load_data(num_train_data, num_classes)
 
     # Choose mode to run
     if args.mode == "train":
         for rerun in range(args.num_reruns):
-            experiments_folder = args.experiment_folder
-            os.makedirs(f"{experiments_folder}", exist_ok=True)
-            if args.num_decoders > 1:
-                decoder_nets = [new_decoder() for _ in range(args.num_decoders)]
+            
+            os.makedirs(f"{experiment_folder}", exist_ok=True)
+            if num_decoders > 1:
+                decoder_nets = [new_decoder() for _ in range(num_decoders)]
                 model = VAE(
                     GaussianPrior(M),
                     GaussianDecoderEnsemble(decoder_nets),
                     GaussianEncoder(new_encoder()),
-                    num_decoders=args.num_decoders
+                    num_decoders=num_decoders
                 ).to(device)
             else:
                 model = VAE(
@@ -608,24 +629,24 @@ if __name__ == "__main__":
                 model,
                 optimizer,
                 mnist_train_loader,
-                args.epochs_per_decoder * args.num_decoders,
-                args.device,
+                epochs_per_decoder * num_decoders,
+                device,
             )
-            os.makedirs(f"{experiments_folder}", exist_ok=True)
+            os.makedirs(f"{experiment_folder}", exist_ok=True)
 
             torch.save(
                 model.state_dict(),
-                f"{experiments_folder}/model_{rerun}.pt",
+                f"{experiment_folder}/{model_name}.pt",
             )
 
     elif args.mode == "sample":
-        if args.num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(args.num_decoders)]
+        if num_decoders > 1:
+            decoder_nets = [new_decoder() for _ in range(num_decoders)]
             model = VAE(
                 GaussianPrior(M),
                 GaussianDecoderEnsemble(decoder_nets),
                 GaussianEncoder(new_encoder()),
-                num_decoders=args.num_decoders
+                num_decoders=num_decoders
             ).to(device)
         else:
             model = VAE(
@@ -633,7 +654,7 @@ if __name__ == "__main__":
                 GaussianDecoder(new_decoder()),
                 GaussianEncoder(new_encoder()),
             ).to(device)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+        model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
         model.eval()
 
         with torch.no_grad():
@@ -648,13 +669,13 @@ if __name__ == "__main__":
 
     elif args.mode == "eval":
         # Load trained model
-        if args.num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(args.num_decoders)]
+        if num_decoders > 1:
+            decoder_nets = [new_decoder() for _ in range(num_decoders)]
             model = VAE(
                 GaussianPrior(M),
                 GaussianDecoderEnsemble(decoder_nets),
                 GaussianEncoder(new_encoder()),
-                num_decoders=args.num_decoders
+                num_decoders=num_decoders
             ).to(device)
         else:
             model = VAE(
@@ -662,7 +683,7 @@ if __name__ == "__main__":
                 GaussianDecoder(new_decoder()),
                 GaussianEncoder(new_encoder()),
             ).to(device)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+        model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
         model.eval()
 
         elbos = []
@@ -676,13 +697,13 @@ if __name__ == "__main__":
 
     elif args.mode == "geodesics":
 
-        if args.num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(args.num_decoders)]
+        if num_decoders > 1:
+            decoder_nets = [new_decoder() for _ in range(num_decoders)]
             model = VAE(
                 GaussianPrior(M),
                 GaussianDecoderEnsemble(decoder_nets),
                 GaussianEncoder(new_encoder()),
-                num_decoders=args.num_decoders
+                num_decoders=num_decoders
             ).to(device)
         else:
             model = VAE(
@@ -690,7 +711,7 @@ if __name__ == "__main__":
                 GaussianDecoder(new_decoder()),
                 GaussianEncoder(new_encoder()),
             ).to(device)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+        model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
         model.eval()
         if M > 2:
             raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
@@ -716,10 +737,9 @@ if __name__ == "__main__":
             rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1, i]
 
             for rerun in range(args.num_reruns):
-                experiments_folder = args.experiment_folder
-                os.makedirs(f"{experiments_folder}", exist_ok=True)
-                if args.num_decoders > 1:
-                    decoder_nets = [new_decoder() for _ in range(args.num_decoders)]
+                os.makedirs(f"{experiment_folder}", exist_ok=True)
+                if num_decoders > 1:
+                    decoder_nets = [new_decoder() for _ in range(num_decoders)]
                     model = VAE(
                         GaussianPrior(M),
                         GaussianDecoderEnsemble(decoder_nets),
@@ -732,7 +752,7 @@ if __name__ == "__main__":
                         GaussianDecoder(new_decoder()),
                         GaussianEncoder(new_encoder()),
                     ).to(device)
-                model.load_state_dict(torch.load(f"{experiments_folder}/model_{rerun}.pt"))
+                model.load_state_dict(torch.load(f"{experiment_folder}/{model_name}_{rerun}.pt"))
                 model.eval()
 
                 latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
