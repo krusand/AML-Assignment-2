@@ -23,6 +23,8 @@ from torchvision.utils import save_image
 
 # Parse arguments
 import argparse
+
+from loguru import logger
 class GaussianPrior(nn.Module):
     def __init__(self, M):
         """
@@ -203,7 +205,6 @@ class VAE(nn.Module):
         """
         return -self.elbo(x)
 
-
 def new_encoder():
     encoder_net = nn.Sequential(
         nn.Conv2d(1, 16, 3, stride=2, padding=1),
@@ -233,8 +234,6 @@ def new_decoder():
         nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
     )
     return decoder_net
-
-
 
 def train(model, optimizer, data_loader, epochs, device):
     """
@@ -276,7 +275,7 @@ def train(model, optimizer, data_loader, epochs, device):
                 if step % 5 == 0:
                     loss = loss.detach().cpu()
                     pbar.set_description(
-                        f"total epochs ={epoch}, step={step}, loss={loss:.1f}"
+                        f"total epochs={epoch}, step={step}, loss={loss:.1f}"
                     )
 
                 if (step + 1) % len(data_loader) == 0:
@@ -318,7 +317,6 @@ class PLcurve(nn.Module):
         delta = c[1:] - c[:-1]
         return delta.sum(dim=1).flatten().sum()
 
-
 def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
     z = curve.points()
     if isinstance(model.decoder, GaussianDecoderEnsemble):
@@ -359,8 +357,7 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
 
     return segment_energy.sum()
 
-
-def connecting_geodesic(model, curve, lr=1e-2, steps=1500, num_decoders=None, mcmc_samples=30):
+def connecting_geodesic(model, curve, lr=1e-3, steps=1500, num_decoders=None, mcmc_samples=30):
     opt = optim.LBFGS([curve.params]
                       , lr=lr
                       , max_iter=steps
@@ -427,8 +424,8 @@ def plot_latent_curves(model, latent_vars, num_curves):
         x0 = torch.tensor(latent_vars[rd_idx_1, :], dtype=torch.float32)
         x1 = torch.tensor(latent_vars[rd_idx_2, :], dtype=torch.float32)
 
-        c = PLcurve(x0, x1, N=10, device=device, init_noise=5e-2)
-        connecting_geodesic(model, c, lr=1e-2, steps=1500, num_decoders=model.num_decoders, mcmc_samples=30)
+        c = PLcurve(x0, x1, N=100, device=device, init_noise=5e-2)
+        connecting_geodesic(model, c, lr=1e-2, steps=500, num_decoders=model.num_decoders, mcmc_samples=30)
         c.plot()
 
 def plot_latent_pixel_uncertainty(model, latent_vars):
@@ -460,7 +457,7 @@ def plot_latent_pixel_uncertainty(model, latent_vars):
     cbar = plt.colorbar(heatmap)
     cbar.set_label('Standard deviation of pixel values')
 
-    # Load a subset of MNIST and create data loaders
+
 def subsample(data, targets, num_data, num_classes):
     idx = targets < num_classes
     new_data = data[idx][:num_data].unsqueeze(1).to(torch.float32) / 255
@@ -526,9 +523,9 @@ def load_args():
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
-        "--model_name",
-        type=str
-        default='model'
+        "--model-name",
+        type=str,
+        default='model',
         help="Model name without file extension (default: %(default)s)"
     )
     parser.add_argument(
@@ -543,7 +540,6 @@ def load_args():
         default="samples.png",
         help="file to save samples in (default: %(default)s)",
     )
-
     parser.add_argument(
         "--device",
         type=str,
@@ -686,7 +682,9 @@ if __name__ == "__main__":
         
         latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
         latent_vars, ys = latent_vars.cpu().numpy(), ys.cpu().numpy()
-
+        
+        plt.figure(figsize=(16, 12))
+        
         plot_latent_pixel_uncertainty(model, latent_vars)
         plot_latent_space(latent_vars=latent_vars, ys=ys, save=False)
         plot_latent_curves(model, latent_vars, args.num_curves)
