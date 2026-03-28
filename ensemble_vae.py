@@ -625,9 +625,9 @@ if __name__ == "__main__":
 
     # Choose mode to run
     if args.mode == "train":
+        os.makedirs(f"{experiment_folder}", exist_ok=True)
+
         for rerun in range(args.num_reruns):
-            
-            os.makedirs(f"{experiment_folder}", exist_ok=True)
             model = get_VAE_model()
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             train(
@@ -637,11 +637,10 @@ if __name__ == "__main__":
                 epochs_per_decoder * num_decoders,
                 device,
             )
-            os.makedirs(f"{experiment_folder}", exist_ok=True)
 
             torch.save(
                 model.state_dict(),
-                f"{experiment_folder}/{model_name}.pt",
+                f"{experiment_folder}/{model_name}_{rerun}.pt",
             )
 
     elif args.mode == "sample":
