@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
 import numpy as np
+import csv
 # Parse arguments
 import argparse
 
@@ -112,7 +113,7 @@ class GaussianDecoderEnsemble(nn.Module):
            A single decoder should be sampled from the list
         """
         super(GaussianDecoderEnsemble, self).__init__()
-        self.decoder_nets = decoder_nets
+        self.decoder_nets = nn.ModuleList(decoder_nets)
 
     def forward(self, z, idx=None):
         """
@@ -437,7 +438,6 @@ def plot_latent_pixel_uncertainty(model, latent_vars):
     cbar.set_label('Standard deviation of pixel values')
 
 
-
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -445,7 +445,7 @@ if __name__ == "__main__":
         "mode",
         type=str,
         default="train",
-        choices=["train", "sample", "eval", "geodesics"],
+        choices=["train", "sample", "eval", "geodesics", "geodesics_ensemble"],
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
@@ -460,7 +460,13 @@ if __name__ == "__main__":
         default="samples.png",
         help="file to save samples in (default: %(default)s)",
     )
-
+    parser.add_argument(
+        "--distance_measure",  # number of points along the curve
+        type=str,
+        default="euclidean",
+        choices=["euclidean", "geodesic"],
+        help="distance measure used when computing the coefficient of variation (CoV)",
+    )
     parser.add_argument(
         "--device",
         type=str,
@@ -698,6 +704,13 @@ if __name__ == "__main__":
 
     elif args.mode == "geodesics_ensemble":
         
+        # use same 10 point pairs (in data space) across all reruns  
+        N = len(mnist_test_loader.dataset)
+        np.random.seed(260402)
+        pair_indices = np.random.choice(N, size=20, replace=True)
+        pair_indices = pair_indices.reshape(10, 2)
+
+        dist_list = []
         for rerun in range(args.num_reruns):
             model = VAE(
                 GaussianPrior(M),
@@ -705,16 +718,54 @@ if __name__ == "__main__":
                 GaussianEncoder(new_encoder()),
                 num_decoders=num_decoders,
             ).to(device)
-            model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+            model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}.pt"))
             model.eval()
 
             if M > 2:
                 raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
             
-            # select 10 pairs of random test points
-            indexes = np.random.choice(a=latent_vars.shape[0], size=10*2, replace=True)
-            _, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
-            pos_means, ys = pos_means.cpu().numpy(), ys.cpu().numpy()
+            # obtain (x_i(m), x_j(m)) as the means of the associated latent variables
+            _, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader)
+            pos_means = pos_means.cpu().numpy()
+            point_pairs = pos_means[pair_indices]  # (10, 2, 2)
+            
+            # measuring distances
+            dist_measure = args.distance_measure
+            rerun_dists = torch.tensor([])
 
+            for pair in point_pairs:
+                z = torch.tensor(pair, dtype=torch.float32).to(device)  # shape: (2, 2)
+
+                if dist_measure == "euclidean":
+                    dist = torch.cdist(z[0].unsqueeze(0), z[1].unsqueeze(0), p=2)   # no reason to loop over decoders as we are measuring euclidean distance in latent space
+                    avg_dist = torch.tensor([dist])
+                else:
+                    decoder_dists = []
+                    for d in range(num_decoders):
+                        q = model.decoder(z, idx=d)   # decoding latent point pair
+        
+                        # measure distance in data space
+                        # decoder_dists.append(dist)
+                    avg_dist = np.mean(decoder_dists)
+                
+                rerun_dists = torch.cat((rerun_dists, avg_dist))
+            
+            # append tensor containing distances for a single VAE for all sampled data points
+            dist_list.append(rerun_dists)
+        
+        # convert to tensor (matrix) of shape (num_reruns, num_point_paris)
+        dist_tensor = torch.stack(dist_list, dim=0) 
+
+        # computing CoV for each point pair (across all reruns)
+        sigmas = torch.std(dist_tensor, dim=0)
+        mus = torch.mean(dist_tensor, dim=0)
+        covs = sigmas / mus
+        cov = torch.mean(covs).item()   # average across all point pairs             
+
+        # append results to csv
+        row = [dist_measure, num_decoders, cov]
+        with open("cov_results.csv", mode="a", newline="") as file:
+            writer = csv.writer(file)
+            writer.writerow(row)
         
         
