@@ -113,6 +113,7 @@ class GaussianDecoderEnsemble(nn.Module):
         """
         super(GaussianDecoderEnsemble, self).__init__()
         self.decoder_nets = decoder_nets
+        self.n_decoders = len(decoder_nets)
 
     def forward(self, z, idx=None):
         """
@@ -258,7 +259,7 @@ class PLcurve:
         self.x1 = x1.reshape(1,-1) # 1xD
         self.N = N
 
-        t = torch.linspace(0, 1, N).reshape(N,1) # Nx1
+        t = torch.linspace(0, 1, N).to(device).reshape(N,1) # Nx1
         c = (1-t) @ self.x0 + t @ self.x1 # NxD # Parametrisation of linear line
         self.params = c[1:-1] # (N-2)xD # Parameters between points are free to optimize, but in the ends not
         self.params.requires_grad = True
@@ -299,7 +300,7 @@ def curve_distance(model,curve):
 def curve_energy_ensemble(model, curve):
     curve_points = curve.points().to(device)
 
-    rd_idxs = np.random.choice(a=num_decoders, size=2, replace=False)
+    rd_idxs = np.random.choice(a=model.decoder.n_decoders, size=2, replace=False)
     idx1, idx2 = rd_idxs[0], rd_idxs[1]
 
     q1 = model.decoder(curve_points, idx1)
@@ -328,6 +329,22 @@ def curve_distance_ensemble(model, curve):
     energy = torch.sum(delta)
 
     return energy
+
+def connecting_geodesic_ensemble(VAE, curve):
+    opt = optim.LBFGS([curve.params]
+                      , lr=0.5
+                      , max_iter=500
+                      , line_search_fn='strong_wolfe')
+    
+    def closure():
+        opt.zero_grad()
+        energy = curve_energy_ensemble(model, curve)
+        energy.backward()
+        return energy
+        
+    opt.zero_grad()
+    opt.step(closure)
+
 
 def connecting_geodesic(model, curve):
     opt = optim.LBFGS([curve.params]
@@ -445,7 +462,7 @@ if __name__ == "__main__":
         "mode",
         type=str,
         default="train",
-        choices=["train", "sample", "eval", "geodesics"],
+        choices=["train", "sample", "eval", "geodesics", "geodesics_ensemble"],
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
@@ -634,10 +651,15 @@ if __name__ == "__main__":
             )
 
     elif args.mode == "sample":
-        
+        if num_decoders > 1:
+            decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
+            decoder = GaussianDecoderEnsemble(decoder_nets)
+
+        else:
+            decoder = GaussianDecoder(new_decoder())
         model = VAE(
             GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
+            decoder,
             GaussianEncoder(new_encoder()),
         ).to(device)
         model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
@@ -656,10 +678,19 @@ if __name__ == "__main__":
     elif args.mode == "eval":
         # Load trained model
 
+
+        if num_decoders > 1:
+            decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
+            decoder = GaussianDecoderEnsemble(decoder_nets)
+
+        else:
+            decoder = GaussianDecoder(new_decoder())
+
         model = VAE(
             GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
+            decoder,
             GaussianEncoder(new_encoder()),
+            num_decoders=num_decoders,
         ).to(device)
         model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
         model.eval()
@@ -699,22 +730,43 @@ if __name__ == "__main__":
     elif args.mode == "geodesics_ensemble":
         
         for rerun in range(args.num_reruns):
+            if num_decoders > 1:
+                decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
+                decoder = GaussianDecoderEnsemble(decoder_nets)
+
+            else:
+                decoder = GaussianDecoder(new_decoder())
+
             model = VAE(
                 GaussianPrior(M),
-                GaussianDecoderEnsemble([new_decoder().to(device) for _ in range(num_decoders)]),
+                decoder,
                 GaussianEncoder(new_encoder()),
                 num_decoders=num_decoders,
             ).to(device)
-            model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+
+            model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}.pt"))
             model.eval()
 
             if M > 2:
                 raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
             
-            # select 10 pairs of random test points
-            indexes = np.random.choice(a=latent_vars.shape[0], size=10*2, replace=True)
-            _, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
+            latent_vars, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
             pos_means, ys = pos_means.cpu().numpy(), ys.cpu().numpy()
+            # select 10 pairs of random test points
+            indexes = np.random.choice(a=latent_vars.shape[0], size=(2,10), replace=True)
 
+            i = 0
+            rd_idx_1, rd_idx_2 = indexes[0, i], indexes[1, i]
+
+
+            x0 = latent_vars[rd_idx_1,:].to(device)
+            x1 = latent_vars[rd_idx_2,:].to(device)
+            print(f"{x0, x1 = }")
+
+            c = PLcurve(x0, x1, 100)
+
+            exit()
+            connecting_geodesic(model, c) 
+            c.plot() 
         
         
