@@ -757,7 +757,7 @@ if __name__ == "__main__":
                 num_decoders=num_decoders,
             ).to(device)
 
-            model.load_state_dict(torch.load(args.experiment_folder + ff"/model_{rerun}_{rerun}.pt"))
+            model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}_{rerun}.pt"))
             model.eval()
 
             if M > 2:
@@ -806,23 +806,25 @@ if __name__ == "__main__":
         with open("cov_results.csv", mode="a", newline="") as file:
             writer = csv.writer(file)
             writer.writerow(row)
-            latent_vars, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
-            pos_means, ys = pos_means.cpu().numpy(), ys.cpu().numpy()
-            # select 10 pairs of random test points
-            indexes = np.random.choice(a=latent_vars.shape[0], size=(2,10), replace=True)
 
-            i = 0
-            rd_idx_1, rd_idx_2 = indexes[0, i], indexes[1, i]
+        
+        latent_vars, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
+        pos_means, ys = pos_means.cpu().numpy(), ys.cpu().numpy()
+        # select 10 pairs of random test points
+        indexes = np.random.choice(a=latent_vars.shape[0], size=(2,10), replace=True)
+
+        i = 0
+        rd_idx_1, rd_idx_2 = indexes[0, i], indexes[1, i]
 
 
-            x0 = latent_vars[rd_idx_1,:].to(device)
-            x1 = latent_vars[rd_idx_2,:].to(device)
-            print(f"{x0, x1 = }")
+        x0 = latent_vars[rd_idx_1,:].to(device)
+        x1 = latent_vars[rd_idx_2,:].to(device)
+        print(f"{x0, x1 = }")
 
-            c = PLcurve(x0, x1, 100)
+        c = PLcurve(x0, x1, 100)
 
-            exit()
-            connecting_geodesic(model, c) 
-            c.plot() 
+        exit()
+        connecting_geodesic(model, c)
+        c.plot() 
         
         
