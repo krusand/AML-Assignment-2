@@ -468,6 +468,24 @@ def subsample(data, targets, num_data, num_classes):
 
     return torch.utils.data.TensorDataset(new_data, new_targets)
 
+def get_VAE_model():
+    if num_decoders > 1:
+        decoder_nets = [new_decoder() for _ in range(num_decoders)]
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoderEnsemble(decoder_nets),
+            GaussianEncoder(new_encoder()),
+            num_decoders=num_decoders
+        ).to(device)
+    else:
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+
+    return model
+
 
 def load_data(num_train_data, num_classes):
     train_tensors = datasets.MNIST(
@@ -610,20 +628,7 @@ if __name__ == "__main__":
         for rerun in range(args.num_reruns):
             
             os.makedirs(f"{experiment_folder}", exist_ok=True)
-            if num_decoders > 1:
-                decoder_nets = [new_decoder() for _ in range(num_decoders)]
-                model = VAE(
-                    GaussianPrior(M),
-                    GaussianDecoderEnsemble(decoder_nets),
-                    GaussianEncoder(new_encoder()),
-                    num_decoders=num_decoders
-                ).to(device)
-            else:
-                model = VAE(
-                    GaussianPrior(M),
-                    GaussianDecoder(new_decoder()),
-                    GaussianEncoder(new_encoder()),
-                ).to(device)
+            model = get_VAE_model()
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             train(
                 model,
@@ -640,20 +645,8 @@ if __name__ == "__main__":
             )
 
     elif args.mode == "sample":
-        if num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(num_decoders)]
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoderEnsemble(decoder_nets),
-                GaussianEncoder(new_encoder()),
-                num_decoders=num_decoders
-            ).to(device)
-        else:
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoder(new_decoder()),
-                GaussianEncoder(new_encoder()),
-            ).to(device)
+        model = get_VAE_model()
+
         model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
         model.eval()
 
@@ -669,20 +662,8 @@ if __name__ == "__main__":
 
     elif args.mode == "eval":
         # Load trained model
-        if num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(num_decoders)]
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoderEnsemble(decoder_nets),
-                GaussianEncoder(new_encoder()),
-                num_decoders=num_decoders
-            ).to(device)
-        else:
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoder(new_decoder()),
-                GaussianEncoder(new_encoder()),
-            ).to(device)
+        model = get_VAE_model()
+
         model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
         model.eval()
 
@@ -697,20 +678,8 @@ if __name__ == "__main__":
 
     elif args.mode == "geodesics":
 
-        if num_decoders > 1:
-            decoder_nets = [new_decoder() for _ in range(num_decoders)]
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoderEnsemble(decoder_nets),
-                GaussianEncoder(new_encoder()),
-                num_decoders=num_decoders
-            ).to(device)
-        else:
-            model = VAE(
-                GaussianPrior(M),
-                GaussianDecoder(new_decoder()),
-                GaussianEncoder(new_encoder()),
-            ).to(device)
+        model = get_VAE_model()
+
         model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
         model.eval()
         if M > 2:
@@ -738,20 +707,8 @@ if __name__ == "__main__":
 
             for rerun in range(args.num_reruns):
                 os.makedirs(f"{experiment_folder}", exist_ok=True)
-                if num_decoders > 1:
-                    decoder_nets = [new_decoder() for _ in range(num_decoders)]
-                    model = VAE(
-                        GaussianPrior(M),
-                        GaussianDecoderEnsemble(decoder_nets),
-                        GaussianEncoder(new_encoder()),
-                        num_decoders=args.num_decoders
-                    ).to(device)
-                else:
-                    model = VAE(
-                        GaussianPrior(M),
-                        GaussianDecoder(new_decoder()),
-                        GaussianEncoder(new_encoder()),
-                    ).to(device)
+                model = get_VAE_model()
+
                 model.load_state_dict(torch.load(f"{experiment_folder}/{model_name}_{rerun}.pt"))
                 model.eval()
 
