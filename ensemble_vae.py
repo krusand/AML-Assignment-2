@@ -381,7 +381,7 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
         connecting_geodesic(model, c, num_decoders=num_decoders)
         c.plot()
         if i % 5 == 0:
-            plt.savefig(f"{args.experiment_folder}/geodesics_{i+1}_curves.png")
+            plt.savefig(f"{args.experiment_folder}/geodesics_{i+1}_curves_{rerun}.png")
 
 
 def plot_latent_pixel_uncertainty(model, latent_vars):
@@ -711,7 +711,7 @@ if __name__ == "__main__":
         print("Print mean test elbo:", mean_elbo)
 
     elif args.mode == "geodesics":
-        rerun = 0
+        rerun = 2
         model = get_VAE_model(args.num_decoders)
         model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}.pt"))
         model.eval()
