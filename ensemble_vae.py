@@ -595,14 +595,14 @@ if __name__ == "__main__":
 
     num_train_data = 2048
     num_classes = 3
+    num_curves = args.num_curves
     mnist_train_loader, mnist_test_loader = load_data(num_train_data, num_classes)
 
 
     # Choose mode to run
     if args.mode == "train":
         
-        experiments_folder = args.experiment_folder
-        os.makedirs(f"{experiments_folder}", exist_ok=True)
+        os.makedirs(f"{experiment_folder}", exist_ok=True)
         for rerun in range(args.num_reruns):
             model = get_VAE_model(args.num_decoders)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
@@ -613,11 +613,11 @@ if __name__ == "__main__":
                 args.epochs_per_decoder * args.num_decoders,
                 args.device,
             )
-            os.makedirs(f"{experiments_folder}", exist_ok=True)
+            os.makedirs(f"{experiment_folder}", exist_ok=True)
 
             torch.save(
                 model.state_dict(),
-                f"{experiments_folder}/model_{rerun}.pt",
+                f"{experiment_folder}/model_{rerun}.pt",
             )
 
     elif args.mode == "sample":
@@ -627,18 +627,18 @@ if __name__ == "__main__":
 
         with torch.no_grad():
             samples = (model.sample(64)).cpu()
-            save_image(samples.view(64, 1, 28, 28), args.samples)
+            save_image(samples.view(64, 1, 28, 28), f"{experiment_folder}/{args.samples}")
 
             data = next(iter(mnist_test_loader))[0].to(device)
             recon = model.decoder(model.encoder(data).mean).mean
             save_image(
-                torch.cat([data.cpu(), recon.cpu()], dim=0), "reconstruction_means.png"
+                torch.cat([data.cpu(), recon.cpu()], dim=0), f"{experiment_folder}/reconstruction_means.png"
             )
 
     elif args.mode == "eval":
         # Load trained model
         model = get_VAE_model(args.num_decoders)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+        model.load_state_dict(torch.load(args.experiment_folder + "/model_0.pt"))
         model.eval()
 
         elbos = []
