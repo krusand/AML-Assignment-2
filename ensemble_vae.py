@@ -278,8 +278,9 @@ class PLcurve(nn.Module):
     
     def distance(self):
         c = self.points()
-        delta = c[1:] - c[:-1]
-        return delta.sum(dim=1).flatten().sum()
+        delta = c[1:] - c[:-1]              # (N-1, latent_dim)
+        segment_lengths = delta.norm(dim=1) # Euclidean norm
+        return segment_lengths.sum()
 
 
 def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
@@ -292,6 +293,9 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
         decoded_means = []
         for d in range(M):
             mean_d = model.decoder(z, idx=d).mean   # (N, 1, 28, 28)
+            if torch.isinf(mean_d).any() or torch.isnan(mean_d).any():
+                print(f"Decoder {d} produced inf or nan values. Skipping this decoder.")
+                ValueError(f"Decoder {d} produced inf or nan values. Skipping this decoder.")
             decoded_means.append(mean_d)
         decoded_means = torch.stack(decoded_means, dim=0)  # (M, N, 1, 28, 28)
 
@@ -299,12 +303,25 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
 
         for i in range(N - 1):
             seg_energies = []
+            if M > 1:
+                for _ in range(mcmc_samples):
+                    idx1, idx2 = np.random.choice(M, size=2, replace=False)
 
-            for _ in range(mcmc_samples):
-                idx1, idx2 = np.random.choice(M, size=2, replace=False)
+                    mean1 = decoded_means[idx1, i]      # (1, 28, 28)
+                    mean2 = decoded_means[idx2, i + 1]  # (1, 28, 28)
 
-                mean1 = decoded_means[idx1, i]      # (1, 28, 28)
-                mean2 = decoded_means[idx2, i + 1]  # (1, 28, 28)
+                    delta = mean1 - mean2
+                    seg_energy = delta.pow(2).sum()
+                    # check if seg_energy is finite, if not, skip it
+                    if seg_energy == float('inf') or seg_energy == float('-inf') or torch.isnan(seg_energy):
+                        # print decoders 
+                        print(f'decoder {idx1} and decoder {idx2} produced infinite energy for segment {i}. Skipping this sample.')
+
+
+                    seg_energies.append(seg_energy)
+            else:
+                mean1 = decoded_means[0, i]      # (1, 28, 28)
+                mean2 = decoded_means[0, i + 1]  # (1, 28, 28)
 
                 delta = mean1 - mean2
                 seg_energy = delta.pow(2).sum()
@@ -323,7 +340,7 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
     return segment_energy.sum()
 
 
-def connecting_geodesic(model, curve, lr=1e-2, steps=1500, num_decoders=None, mcmc_samples=30):
+def connecting_geodesic(model, curve, lr=1e-3, steps=2000, num_decoders=None, mcmc_samples=30):
     opt = optim.LBFGS([curve.params]
                       , lr=lr
                       , max_iter=steps
@@ -391,7 +408,7 @@ def plot_latent_curves(model, latent_vars, num_curves):
         x1 = torch.tensor(latent_vars[rd_idx_2, :], dtype=torch.float32)
 
         c = PLcurve(x0, x1, N=10, device=device, init_noise=5e-2)
-        connecting_geodesic(model, c, lr=1e-2, steps=1500, num_decoders=model.num_decoders, mcmc_samples=30)
+        connecting_geodesic(model, c, lr=1e-4, steps=1500, num_decoders=model.num_decoders, mcmc_samples=30)
         c.plot()
 
 def plot_latent_pixel_uncertainty(model, latent_vars):
@@ -435,7 +452,7 @@ if __name__ == "__main__":
         "mode",
         type=str,
         default="train",
-        choices=["train", "sample", "eval", "geodesics"],
+        choices=["train", "sample", "eval", "geodesics", "cov"],
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
@@ -708,16 +725,20 @@ if __name__ == "__main__":
     elif args.mode == "cov":
 
         # select 10 random point pairs in the latent space
+        print("Calculating geodesic distances and euclidean distances for random point pairs...")
         rd_points = np.random.choice(100, size=args.num_curves * 2, replace=True)
         rd_points = rd_points.reshape(2, args.num_curves)
         point_pairs_distances = {}
         point_pairs_distances_euclidian = {}
         for i in tqdm(range(args.num_curves)):
+            print(f"Calculating distances for curve {i+1}/{args.num_curves}...")
             rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1, i]
 
+            print(f"Randomly selected point pair indices: {rd_idx_1}, {rd_idx_2}")
             for rerun in range(args.num_reruns):
                 experiments_folder = args.experiment_folder
                 os.makedirs(f"{experiments_folder}", exist_ok=True)
+                print(f"Loading model for rerun {rerun+1}/{args.num_reruns}...")
                 if args.num_decoders > 1:
                     decoder_nets = [new_decoder() for _ in range(args.num_decoders)]
                     model = VAE(
@@ -734,7 +755,7 @@ if __name__ == "__main__":
                     ).to(device)
                 model.load_state_dict(torch.load(f"{experiments_folder}/model_{rerun}.pt"))
                 model.eval()
-
+                print("encoding data to latent space...")
                 latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
                 latent_vars, ys = latent_vars.cpu().numpy(), ys.cpu().numpy()
 
@@ -742,8 +763,8 @@ if __name__ == "__main__":
                     # curve between latent
                     z1 = torch.tensor(latent_vars[rd_idx_1, :], dtype=torch.float32)
                     z2 = torch.tensor(latent_vars[rd_idx_2, :], dtype=torch.float32)
-                    c = PLcurve(z1, z2, N=args.num_t, device=device, init_noise=5e-2)
-                    connecting_geodesic(model, c, lr=1e-2, steps=1500, num_decoders=d, mcmc_samples=30)
+                    c = PLcurve(z1, z2, N=args.num_t, device=device, init_noise=0)
+                    connecting_geodesic(model, c, lr=1e-4, steps=10000, num_decoders=d+1, mcmc_samples=30)
                     distance = c.distance().item()
                     point_pairs_distances[(rd_idx_1, rd_idx_2, rerun, d)] = distance
 
@@ -753,3 +774,6 @@ if __name__ == "__main__":
 
         np.save("point_pairs_distances.npy", point_pairs_distances)
         np.save("point_pairs_distances_euclidian.npy", point_pairs_distances_euclidian)
+
+        print("Finished calculating distances.")
+        
