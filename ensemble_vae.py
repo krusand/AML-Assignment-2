@@ -17,6 +17,7 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
 import numpy as np
+import pandas as pd
 # Parse arguments
 import argparse
 
@@ -464,6 +465,62 @@ def subsample(data, targets, num_data, num_classes):
 
     return torch.utils.data.TensorDataset(new_data, new_targets)
 
+def aggregate_cov_data(filename: str, dist_measure: str, num_decoders: int) -> pd.DataFrame:
+    """
+    Aggregates the raw distance results from a .npy file into the final cov results.
+
+    Args:
+    - filename:                 Name of .npy file.
+    - dist_measure:             Distance measure, either 'euclidean' or 'geodesic'.
+    - num_decoders:             Number of decoders. 
+    
+    Returns:
+    - df_cov_per_num_decoders:  Dataframe containing average CoV across point pairs and VAEs.
+    """
+    # loading npy file
+    raw_data = np.load(f"{filename}.npy", allow_pickle=True)
+
+    # converting to pandas dataframes
+    dist_data = raw_data.item()
+    if dist_measure == "geodesic":
+        df_dist = pd.DataFrame(
+            [(k[0], k[1], k[2], k[3], v) for k, v in dist_data.items()],
+            columns=["point1", "point2", "vae_idx", "num_decoders", "distance"]
+            )
+    elif dist_measure == "euclidean":
+        df_dist = pd.DataFrame(
+            [(k[0], k[1], k[2], v) for k, v in dist_data.items()],
+            columns=["point1", "point2", "vae_idx", "distance"]
+        )
+        # Repeat rows for all possible values of num_decoders
+        df_dist = df_dist.loc[df_dist.index.repeat(num_decoders)].copy()
+        df_dist["num_decoders"] = np.tile(np.arange(1, num_decoders + 1), len(df_dist) // num_decoders)
+    else:
+        ValueError("dist_measure argument must be either 'euclidean' or 'geodesic'")
+
+    # computing mean (mu) and standard deviation (sigma) across VAEs for each number of decoders and point pair
+    df_grouped = (
+        df_dist
+        .groupby(["point1", "point2", "num_decoders"])["distance"]
+        .agg(
+            mu="mean",
+            sigma=lambda x: x.std(ddof=0)   # pandas uses sample standard deviation (divides by N-1 instead of N)
+        ).reset_index()
+    )
+
+    # computing cov per point pair
+    df_grouped["cov"] = df_grouped["sigma"] / df_grouped["mu"]
+
+    # average cov across point pairs for each number of decoders
+    df_cov_per_num_decoders = (
+        df_grouped
+        .groupby(["num_decoders"])["cov"]
+        .agg(avg_cov="mean")
+        .reset_index()
+    )
+
+    return df_cov_per_num_decoders
+
 def load_data(num_train_data, num_classes):
     train_tensors = datasets.MNIST(
         "data/",
@@ -664,7 +721,67 @@ if __name__ == "__main__":
 
         plot_latent_space(latent_vars=latent_vars, ys=ys, save=False)
         plot_latent_pixel_uncertainty(model, latent_vars)
-        plot_latent_curves(model, latent_vars, num_curves, num_decoders=args.num_decoders)
+        plot_latent_curves(model, latent_vars, args.num_curves, num_decoders=args.num_decoders)
         
         plt.tight_layout()
-        plt.savefig(f"{args.experiment_folder}/geodesics_{num_curves}_curves.png")
+        plt.savefig(f"{args.experiment_folder}/geodesics_{args.num_curves}_curves.png")
+
+    elif args.mode == "cov":
+
+        # select 10 random point pairs in the latent space
+        print("Calculating geodesic distances and euclidean distances for random point pairs...")
+        rd_points = np.random.choice(100, size=args.num_curves * 2, replace=True)
+        rd_points = rd_points.reshape(2, args.num_curves)
+        point_pairs_distances = {}
+        point_pairs_distances_euclidian = {}
+        for i in tqdm(range(args.num_curves)):
+            print(f"Calculating distances for curve {i+1}/{args.num_curves}...")
+            rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1, i]
+
+            print(f"Randomly selected point pair indices: {rd_idx_1}, {rd_idx_2}")
+            for rerun in range(args.num_reruns):
+                os.makedirs(f"{experiment_folder}", exist_ok=True)
+                model = get_VAE_model()
+
+                model.load_state_dict(torch.load(f"{experiment_folder}/{model_name}_{rerun}.pt"))
+
+                model.eval()
+                print("encoding data to latent space...")
+                latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
+                latent_vars, ys = latent_vars.cpu().numpy(), ys.cpu().numpy()
+
+                for d in range(model.num_decoders):
+                    # curve between latent
+                    z1 = torch.tensor(latent_vars[rd_idx_1, :], dtype=torch.float32)
+                    z2 = torch.tensor(latent_vars[rd_idx_2, :], dtype=torch.float32)
+                    c = PLcurve(z1, z2, N=args.num_t, device=device, init_noise=0)
+                    connecting_geodesic(model, c, lr=1e-4, steps=10000, num_decoders=d+1, mcmc_samples=30)
+                    distance = c.distance().item()
+                    point_pairs_distances[(rd_idx_1, rd_idx_2, rerun, d+1)] = distance   # d+1 to obtain number of decoders instead of index
+
+                # Calculate Euclidean distances
+                euclidean_distance = torch.norm(z1 - z2).item()
+                point_pairs_distances_euclidian[(rd_idx_1, rd_idx_2, rerun)] = euclidean_distance   
+
+        np.save("point_pairs_distances.npy", point_pairs_distances)
+        np.save("point_pairs_distances_euclidean.npy", point_pairs_distances_euclidian)
+
+        print("Finished calculating distances.")
+
+        # aggregate raw CoV data from npy files 
+        euclidean_covs = aggregate_cov_data("point_pairs_distances_euclidean", "euclidean", num_decoders)
+        geodesic_covs = aggregate_cov_data("point_pairs_distances", "geodesic", num_decoders)
+
+        # plotting CoVs in line chart
+        plt.figure()
+        plt.plot(euclidean_covs["num_decoders"], euclidean_covs["avg_cov"], label="Euclidean distance")
+        plt.plot(geodesic_covs["num_decoders"], geodesic_covs["avg_cov"], label="Geodesic distance")
+        plt.xticks(geodesic_covs["num_decoders"])
+        plt.xlabel("Number of decoders")
+        plt.ylabel("Coefficient of Variation")
+        plt.legend()
+
+        # saving plot as png
+        filename = f"cov_plot_{num_decoders}_decoders.png"
+        plt.savefig(filename, dpi=300, bbox_inches="tight")
+        print(f"Saved CoV plot as {filename}")
