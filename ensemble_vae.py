@@ -1,4 +1,3 @@
-# Code for DTU course 02460 (Advanced Machine Learning Spring) by Jes Frellsen, 2024
 # Version 1.0 (2024-01-27)
 # Inspiration is taken from:
 # - https://github.com/jmtomczak/intro_dgm/blob/main/vaes/vae_example.ipynb
@@ -19,7 +18,6 @@ import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
 import numpy as np
-import csv
 # Parse arguments
 import argparse
 
@@ -87,6 +85,7 @@ class GaussianDecoder(nn.Module):
         super(GaussianDecoder, self).__init__()
         self.decoder_net = decoder_net
 
+
     def forward(self, z):
         """
         Given a batch of latent variables, return a Bernoulli distribution over the data space.
@@ -95,39 +94,10 @@ class GaussianDecoder(nn.Module):
         z: [torch.Tensor]
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
-        means, stds = torch.chunk(self.decoder_net(z), 2, dim=1)
-        
-        return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
+        means = self.decoder_net(z)
+        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
 
-class GaussianDecoderEnsemble(nn.Module):
-    def __init__(self, decoder_nets):
-        """
-        Define a Gaussian decoder distribution based on a list of decoder networks.
-        Samples a decoder randomly every forward batch.
 
-        Parameters:
-        decoder_net: list[torch.nn.Module]
-           A list of decoder networks that takes as a tensor of dim `(batch_size, M) as
-           input, where M is the dimension of the latent space, and outputs a
-           tensor of dimension (batch_size, feature_dim1, feature_dim2).
-           A single decoder should be sampled from the list
-        """
-        super(GaussianDecoderEnsemble, self).__init__()
-        self.decoder_nets = nn.ModuleList(decoder_nets)
-        self.n_decoders = len(decoder_nets)
-
-    def forward(self, z, idx=None):
-        """
-        Given a batch of latent variables, return a Gaussian distribution over the data space.
-
-        Parameters:
-        z: [torch.Tensor]
-           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
-        """
-        decoder_net = self.decoder_nets[idx]
-        means, stds = torch.chunk(decoder_net(z), 2, dim=1)
-        
-        return td.Independent(td.Normal(loc=means, scale=torch.exp(stds)), 3)
 
 class VAE(nn.Module):
     """
@@ -150,7 +120,6 @@ class VAE(nn.Module):
         self.decoder = decoder
         self.encoder = encoder
         self.num_decoders = num_decoders
-
     def elbo(self, x):
         """
         Compute the ELBO for the given batch of data.
@@ -163,6 +132,7 @@ class VAE(nn.Module):
         """
         q = self.encoder(x)
         z = q.rsample()
+
         if isinstance(self.decoder, GaussianDecoderEnsemble):
             idx = np.random.choice(self.num_decoders, size=1)[0]
             elbo = torch.mean(
@@ -174,7 +144,7 @@ class VAE(nn.Module):
             )
         return elbo
 
-    def sample(self, n_samples=1, idx=None):
+    def sample(self, n_samples=1):
         """
         Sample from the model.
 
@@ -183,12 +153,7 @@ class VAE(nn.Module):
            Number of samples to generate.
         """
         z = self.prior().sample(torch.Size([n_samples]))
-        if isinstance(self.decoder, GaussianDecoderEnsemble):
-            all_samples = self.decoder(z, idx).sample()
-        else:
-            all_samples = self.decoder(z).sample()
-
-        return all_samples
+        return self.decoder(z).sample()
 
     def forward(self, x):
         """
@@ -199,6 +164,39 @@ class VAE(nn.Module):
            A tensor of dimension `(batch_size, feature_dim1, feature_dim2)`
         """
         return -self.elbo(x)
+    
+class GaussianDecoderEnsemble(nn.Module):
+    def __init__(self, decoder_nets):
+        """
+        Define a Gaussian decoder distribution based on a list of decoder networks.
+        Samples a decoder randomly every forward batch.
+
+        Parameters:
+        decoder_net: list[torch.nn.Module]
+           A list of decoder networks that takes as a tensor of dim `(batch_size, M) as
+           input, where M is the dimension of the latent space, and outputs a
+           tensor of dimension (batch_size, feature_dim1, feature_dim2).
+           A single decoder should be sampled from the list
+        """
+        super(GaussianDecoderEnsemble, self).__init__()
+        self.decoder_nets = nn.ModuleList(decoder_nets)
+
+    def forward(self, z, idx=None):
+        """
+        Given a batch of latent variables, return a Gaussian distribution over the data space.
+
+        Parameters:
+        z: [torch.Tensor]
+           A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
+        """
+        if idx is None:
+            idx = np.random.choice(len(self.decoder_nets), size=1)[0]
+            decoder_net = self.decoder_nets[idx]
+        else:
+            decoder_net = self.decoder_nets[idx]
+        means = decoder_net(z)
+        
+        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
 
 
 def train(model, optimizer, data_loader, epochs, device):
@@ -272,110 +270,56 @@ class PLcurve:
 
     def plot(self):
         c = self.points().detach().numpy()
-        plt.plot(c[:,0], c[:,1], color='k', alpha=0.2)
+        plt.plot(c[:,0], c[:,1], color='k', alpha=0.6)
 
 
-def curve_energy(model,curve):
 
-    curve_points = curve.points().to(device)
-    q = model.decoder(curve_points)
-    pos_mean, pos_std = q.mean, q.stddev
+def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
+    z = curve.points().to(device) 
+    if isinstance(model.decoder, GaussianDecoderEnsemble):
+        M = num_decoders if num_decoders is not None else model.num_decoders
 
-    delta = pos_mean[1:] - pos_mean[:-1]
-    energy = torch.sum(delta**2)
+        decoded_means = torch.stack(
+            [model.decoder(z, idx=d).mean for d in range(M)],
+            dim=0
+        )  # (M, N, 1, 28, 28)
 
-    return energy
+        dec1 = (decoded_means[:, 1:]).unsqueeze(1)
+        dec2 = (decoded_means[:, :-1]).unsqueeze(0)
 
-def curve_distance(model,curve):
+        
 
-    curve_points = curve.points().to(device)
-    q = model.decoder(curve_points)
-    pos_mean, pos_std = q.mean, q.stddev
+        delta = dec1 - dec2
+        seg_energy = delta.pow(2).flatten(start_dim=3).sum(dim=3)  # Shape: (M, M, N-1)
+        seg_energy = seg_energy.mean(dim=(0, 1)).sum()
 
-    delta = pos_mean[1:] - pos_mean[:-1]
-    energy = torch.sum(delta)
+        return seg_energy
+               
+    else:             
+        mean_x = model.decoder(z).mean     # (N, 1, 28, 28)
 
-    return energy
+        delta = mean_x[1:] - mean_x[:-1]   # consecutive decoded means
+        segment_energy = delta.pow(2).flatten(start_dim=1).sum(dim=1)
 
-
-def curve_energy_ensemble(model, curve):
-    curve_points = curve.points().to(device)
-
-    rd_idxs = np.random.choice(a=model.decoder.n_decoders, size=2, replace=False)
-    idx1, idx2 = rd_idxs[0], rd_idxs[1]
-
-    q1 = model.decoder(curve_points, idx1)
-    q2 = model.decoder(curve_points, idx2)
-    pos1_mean = q1.mean
-    pos2_mean = q2.mean
-
-    delta = pos1_mean[1:] - pos2_mean[:-1]
-    energy = torch.sum(delta**2)
-
-    return energy
+    return segment_energy.sum()
 
 
-def curve_distance_ensemble(model, curve):
-    curve_points = curve.points().to(device)
-
-    rd_idxs = np.random.choice(a=num_decoders, size=2, replace=False)
-    idx1, idx2 = rd_idxs[0], rd_idxs[1]
-
-    q1 = model.decoder(curve_points, idx1)
-    q2 = model.decoder(curve_points, idx2)
-    pos1_mean = q1.mean
-    pos2_mean = q2.mean
-
-    delta = pos1_mean[1:] - pos2_mean[:-1]
-    energy = torch.sum(delta)
-
-    return energy
-
-def connecting_geodesic_ensemble(VAE, curve):
+def connecting_geodesic(model, curve, num_decoders=None):
     opt = optim.LBFGS([curve.params]
-                      , lr=0.5
-                      , max_iter=500
+                      , lr=1e-2
+                      , max_iter=2000
                       , line_search_fn='strong_wolfe')
-    
+
     def closure():
         opt.zero_grad()
-        energy = curve_energy_ensemble(model, curve)
+        energy = curve_energy(model, curve, num_decoders=num_decoders if num_decoders is not None else model.num_decoders)
         energy.backward()
         return energy
-        
+
     opt.zero_grad()
     opt.step(closure)
 
 
-def connecting_geodesic(model, curve):
-    opt = optim.LBFGS([curve.params]
-                      , lr=0.5
-                      , max_iter=500
-                      , line_search_fn='strong_wolfe')
-    
-    def closure():
-        opt.zero_grad()
-        energy = curve_energy(model, curve)
-        energy.backward()
-        return energy
-        
-    opt.zero_grad()
-    opt.step(closure)
-
-def connecting_geodesic_ensemble(model, curve):
-    opt = optim.LBFGS([curve.params]
-                      , lr=0.5
-                      , max_iter=500
-                      , line_search_fn='strong_wolfe')
-    
-    def closure():
-        opt.zero_grad()
-        energy = curve_distance_ensemble(model, curve)
-        energy.backward()
-        return energy
-        
-    opt.zero_grad()
-    opt.step(closure)
 
 def encode_data_to_latent_space(model, mnist_data_loader):
     with torch.no_grad():
@@ -411,7 +355,8 @@ def encode_data_to_latent_space(model, mnist_data_loader):
         return latent_vars, ys, pos_means, pos_stds
 
 def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png'):
-    scatter = plt.scatter(latent_vars[:, 0], latent_vars[:, 1], c=ys, alpha=0.9, cmap="tab10")
+    plt.figure(figsize=(16, 12))
+    scatter = plt.scatter(latent_vars[:, 0], latent_vars[:, 1], c=ys, alpha=0.6, cmap="tab10")
     handles, labels = scatter.legend_elements(prop="colors", alpha=0.6)
     legend = plt.legend(handles, range(10), title="Class Label")
     if curve is not None:
@@ -419,10 +364,10 @@ def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png
     if save:
         plt.savefig("latent_space_" + plot_name)
 
-def plot_latent_curves(model, latent_vars, num_curves):
+def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
     # sample 2*num_curves random points
     
-    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=True)
+    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=False)
     rd_points = rd_points.reshape(2, num_curves)
 
     for i in tqdm(range(num_curves)):
@@ -432,7 +377,7 @@ def plot_latent_curves(model, latent_vars, num_curves):
 
         c = PLcurve(x0, x1, 100)
         
-        connecting_geodesic(model, c) 
+        connecting_geodesic(model, c, num_decoders=num_decoders)
         c.plot() 
 
 def plot_latent_pixel_uncertainty(model, latent_vars):
@@ -446,14 +391,40 @@ def plot_latent_pixel_uncertainty(model, latent_vars):
     zz1_tensor = torch.tensor(zz1.flatten()).reshape(-1,1) # (N^2)x1
     zz2_tensor = torch.tensor(zz2.flatten()).reshape(-1,1) # (N^2)x1
     zz = torch.concatenate([zz1_tensor, zz2_tensor], axis=1) # (N^2)x2
-    
-    q = model.decoder(zz.to(device))
-    stddev_means = torch.mean(q.stddev, dim=(1,2,3))
-    stddev_means_grid = stddev_means.reshape(n_grid_points, n_grid_points).detach().cpu().numpy()
+    if isinstance(model.decoder, GaussianDecoderEnsemble):
+        means = []
+        for idx in range(model.num_decoders):
+            q = model.decoder(zz.to(device), idx)
+            means.append(q.mean)
+        means = torch.stack(means, dim=0) # num_decoders x (N^2) x 1 x 28 x 28
+        mean_of_means = means.mean(dim=0) # (N^2) x 1 x 28 x 28
+        stddev_means = torch.mean((means - mean_of_means)**2, dim=(0,2,3,4)) # (N^2)
+        stddev_means_grid = stddev_means.reshape(n_grid_points, n_grid_points).detach().cpu().numpy()
+    else:
+        q = model.decoder(zz.to(device))
+        stddev_means = torch.mean(q.stddev, dim=(1,2,3))
+        stddev_means_grid = stddev_means.reshape(n_grid_points, n_grid_points).detach().cpu().numpy()
     heatmap = plt.contourf(zz1, zz2, stddev_means_grid, levels=100, cmap='viridis', alpha=0.5)
     cbar = plt.colorbar(heatmap)
     cbar.set_label('Standard deviation of pixel values')
 
+def get_VAE_model(num_decoders):
+    if num_decoders > 1:
+        decoder_nets = [new_decoder() for _ in range(num_decoders)]
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoderEnsemble(decoder_nets),
+            GaussianEncoder(new_encoder()),
+            num_decoders=num_decoders
+        ).to(device)
+    else:
+        model = VAE(
+            GaussianPrior(M),
+            GaussianDecoder(new_decoder()),
+            GaussianEncoder(new_encoder()),
+        ).to(device)
+
+    return model
 
 if __name__ == "__main__":
 
@@ -462,7 +433,7 @@ if __name__ == "__main__":
         "mode",
         type=str,
         default="train",
-        choices=["train", "sample", "eval", "geodesics", "geodesics_ensemble"],
+        choices=["train", "sample", "eval", "geodesics"],
         help="what to do when running the script (default: %(default)s)",
     )
     parser.add_argument(
@@ -477,13 +448,7 @@ if __name__ == "__main__":
         default="samples.png",
         help="file to save samples in (default: %(default)s)",
     )
-    parser.add_argument(
-        "--distance_measure",  # number of points along the curve
-        type=str,
-        default="euclidean",
-        choices=["euclidean", "geodesic"],
-        help="distance measure used when computing the coefficient of variation (CoV)",
-    )
+
     parser.add_argument(
         "--device",
         type=str,
@@ -548,8 +513,6 @@ if __name__ == "__main__":
 
     device = args.device
     num_curves = args.num_curves
-    num_decoders = args.num_decoders
-
     # Load a subset of MNIST and create data loaders
     def subsample(data, targets, num_data, num_classes):
         idx = targets < num_classes
@@ -616,37 +579,23 @@ if __name__ == "__main__":
             nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
             nn.Softmax(),
             nn.BatchNorm2d(16),
-            nn.ConvTranspose2d(16, 2, 3, stride=2, padding=1, output_padding=1),
+            nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
         )
         return decoder_net
 
     # Choose mode to run
     if args.mode == "train":
-
+        
         experiments_folder = args.experiment_folder
         os.makedirs(f"{experiments_folder}", exist_ok=True)
-
         for rerun in range(args.num_reruns):
-
-            if num_decoders > 1:
-                decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
-                decoder = GaussianDecoderEnsemble(decoder_nets)
-
-            else:
-                decoder = GaussianDecoder(new_decoder())
-
-            model = VAE(
-                GaussianPrior(M),
-                decoder,
-                GaussianEncoder(new_encoder()),
-                num_decoders=num_decoders,
-            ).to(device)
+            model = get_VAE_model(args.num_decoders)
             optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
             train(
                 model,
                 optimizer,
                 mnist_train_loader,
-                args.epochs_per_decoder * num_decoders,
+                args.epochs_per_decoder * args.num_decoders,
                 args.device,
             )
             os.makedirs(f"{experiments_folder}", exist_ok=True)
@@ -657,18 +606,8 @@ if __name__ == "__main__":
             )
 
     elif args.mode == "sample":
-        if num_decoders > 1:
-            decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
-            decoder = GaussianDecoderEnsemble(decoder_nets)
-
-        else:
-            decoder = GaussianDecoder(new_decoder())
-        model = VAE(
-            GaussianPrior(M),
-            decoder,
-            GaussianEncoder(new_encoder()),
-        ).to(device)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+        model = get_VAE_model(args.num_decoders)
+        model.load_state_dict(torch.load(args.experiment_folder + f"/model_{0}.pt"))
         model.eval()
 
         with torch.no_grad():
@@ -683,21 +622,7 @@ if __name__ == "__main__":
 
     elif args.mode == "eval":
         # Load trained model
-
-
-        if num_decoders > 1:
-            decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
-            decoder = GaussianDecoderEnsemble(decoder_nets)
-
-        else:
-            decoder = GaussianDecoder(new_decoder())
-
-        model = VAE(
-            GaussianPrior(M),
-            decoder,
-            GaussianEncoder(new_encoder()),
-            num_decoders=num_decoders,
-        ).to(device)
+        model = get_VAE_model(args.num_decoders)
         model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
         model.eval()
 
@@ -712,12 +637,8 @@ if __name__ == "__main__":
 
     elif args.mode == "geodesics":
 
-        model = VAE(
-            GaussianPrior(M),
-            GaussianDecoder(new_decoder()),
-            GaussianEncoder(new_encoder()),
-        ).to(device)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model.pt"))
+        model = get_VAE_model(args.num_decoders)
+        model.load_state_dict(torch.load(args.experiment_folder + "/model_0.pt"))
         model.eval()
 
         if M > 2:
@@ -725,106 +646,10 @@ if __name__ == "__main__":
 
         latent_vars, ys, _, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD, Nx1
         latent_vars, ys = latent_vars.cpu().numpy(), ys.cpu().numpy()
-        plt.figure(figsize=(16, 12))
-        plot_latent_pixel_uncertainty(model, latent_vars)
+
         plot_latent_space(latent_vars=latent_vars, ys=ys, save=False)
-        plot_latent_curves(model, latent_vars, num_curves)
+        plot_latent_pixel_uncertainty(model, latent_vars)
+        plot_latent_curves(model, latent_vars, num_curves, num_decoders=args.num_decoders)
         
         plt.tight_layout()
-        plt.savefig(f"geodesics_{num_curves}_curves.png")
-
-    elif args.mode == "geodesics_ensemble":
-        
-        # use same 10 point pairs (in data space) across all reruns  
-        N = len(mnist_test_loader.dataset)
-        np.random.seed(260402)
-        pair_indices = np.random.choice(N, size=20, replace=True)
-        pair_indices = pair_indices.reshape(10, 2)
-
-        dist_list = []
-        for rerun in range(args.num_reruns):
-            if num_decoders > 1:
-                decoder_nets = [new_decoder().to(device) for _ in range(num_decoders)]
-                decoder = GaussianDecoderEnsemble(decoder_nets)
-
-            else:
-                decoder = GaussianDecoder(new_decoder())
-
-            model = VAE(
-                GaussianPrior(M),
-                decoder,
-                GaussianEncoder(new_encoder()),
-                num_decoders=num_decoders,
-            ).to(device)
-
-            model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}_{rerun}.pt"))
-            model.eval()
-
-            if M > 2:
-                raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
-            
-            # obtain (x_i(m), x_j(m)) as the means of the associated latent variables
-            _, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader)
-            pos_means = pos_means.cpu().numpy()
-            point_pairs = pos_means[pair_indices]  # (10, 2, 2)
-            
-            # measuring distances
-            dist_measure = args.distance_measure
-            rerun_dists = torch.tensor([])
-
-            for pair in point_pairs:
-                z = torch.tensor(pair, dtype=torch.float32).to(device)  # shape: (2, 2)
-
-                if dist_measure == "euclidean":
-                    dist = torch.cdist(z[0].unsqueeze(0), z[1].unsqueeze(0), p=2)   # no reason to loop over decoders as we are measuring euclidean distance in latent space
-                    avg_dist = torch.tensor([dist])
-                else:
-                    decoder_dists = []
-                    for d in range(num_decoders):
-                        q = model.decoder(z, idx=d)   # decoding latent point pair
-        
-                        # measure distance in data space
-                        # decoder_dists.append(dist)
-                    avg_dist = np.mean(decoder_dists)
-                
-                rerun_dists = torch.cat((rerun_dists, avg_dist))
-            
-            # append tensor containing distances for a single VAE for all sampled data points
-            dist_list.append(rerun_dists)
-        
-        # convert to tensor (matrix) of shape (num_reruns, num_point_paris)
-        dist_tensor = torch.stack(dist_list, dim=0) 
-
-        # computing CoV for each point pair (across all reruns)
-        sigmas = torch.std(dist_tensor, dim=0)
-        mus = torch.mean(dist_tensor, dim=0)
-        covs = sigmas / mus
-        cov = torch.mean(covs).item()   # average across all point pairs             
-
-        # append results to csv
-        row = [dist_measure, num_decoders, cov]
-        with open("cov_results.csv", mode="a", newline="") as file:
-            writer = csv.writer(file)
-            writer.writerow(row)
-
-        
-        latent_vars, ys, pos_means, _ = encode_data_to_latent_space(model, mnist_test_loader) # NxD
-        pos_means, ys = pos_means.cpu().numpy(), ys.cpu().numpy()
-        # select 10 pairs of random test points
-        indexes = np.random.choice(a=latent_vars.shape[0], size=(2,10), replace=True)
-
-        i = 0
-        rd_idx_1, rd_idx_2 = indexes[0, i], indexes[1, i]
-
-
-        x0 = latent_vars[rd_idx_1,:].to(device)
-        x1 = latent_vars[rd_idx_2,:].to(device)
-        print(f"{x0, x1 = }")
-
-        c = PLcurve(x0, x1, 100)
-
-        exit()
-        connecting_geodesic(model, c)
-        c.plot() 
-        
-        
+        plt.savefig(f"{args.experiment_folder}/geodesics_{num_curves}_curves.png")
