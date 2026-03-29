@@ -17,6 +17,7 @@ from copy import deepcopy
 import os
 import math
 import matplotlib.pyplot as plt
+import pandas as pd
 
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
@@ -319,53 +320,20 @@ class PLcurve(nn.Module):
         return segment_lengths.sum()
 
 def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
-    z = curve.points()
+    z = curve.points().to(device) 
     if isinstance(model.decoder, GaussianDecoderEnsemble):
-        N = z.shape[0]
         M = num_decoders if num_decoders is not None else model.num_decoders
 
-        # Decode all curve points once for each decoder
-        decoded_means = []
-        for d in range(M):
-            mean_d = model.decoder(z, idx=d).mean   # (N, 1, 28, 28)
-            if torch.isinf(mean_d).any() or torch.isnan(mean_d).any():
-                print(f"Decoder {d} produced inf or nan values. Skipping this decoder.")
-                ValueError(f"Decoder {d} produced inf or nan values. Skipping this decoder.")
-            decoded_means.append(mean_d)
-        decoded_means = torch.stack(decoded_means, dim=0)  # (M, N, 1, 28, 28)
+        decoded_means = torch.stack(
+            [model.decoder(z, idx=d).mean for d in range(M)],
+            dim=0
+        )  # (M, N, 1, 28, 28)
 
-        full_energy = 0.0
+        delta = decoded_means[:, 1:] - decoded_means[:, :-1]
+        seg_energy = delta.pow(2).flatten(start_dim=2).sum(dim=2)  # (M, N-1)
 
-        for i in range(N - 1):
-            seg_energies = []
-            if M > 1:
-                for _ in range(mcmc_samples):
-                    idx1, idx2 = np.random.choice(M, size=2, replace=False)
-
-                    mean1 = decoded_means[idx1, i]      # (1, 28, 28)
-                    mean2 = decoded_means[idx2, i + 1]  # (1, 28, 28)
-
-                    delta = mean1 - mean2
-                    seg_energy = delta.pow(2).sum()
-                    # check if seg_energy is finite, if not, skip it
-                    if seg_energy == float('inf') or seg_energy == float('-inf') or torch.isnan(seg_energy):
-                        # print decoders 
-                        print(f'decoder {idx1} and decoder {idx2} produced infinite energy for segment {i}. Skipping this sample.')
-
-
-                    seg_energies.append(seg_energy)
-            else:
-                mean1 = decoded_means[0, i]      # (1, 28, 28)
-                mean2 = decoded_means[0, i + 1]  # (1, 28, 28)
-
-                delta = mean1 - mean2
-                seg_energy = delta.pow(2).sum()
-
-                seg_energies.append(seg_energy)
-
-            full_energy = full_energy + torch.stack(seg_energies).mean()
-
-        return full_energy
+        return seg_energy.mean(dim=0).sum()
+               
     else:             
         mean_x = model.decoder(z).mean     # (N, 1, 28, 28)
 
@@ -501,6 +469,62 @@ def get_VAE_model():
         ).to(device)
 
     return model
+
+def aggregate_cov_data(filename: str, dist_measure: str, num_decoders: int) -> pd.DataFrame:
+    """
+    Aggregates the raw distance results from a .npy file into the final cov results.
+
+    Args:
+    - filename:                 Name of .npy file.
+    - dist_measure:             Distance measure, either 'euclidean' or 'geodesic'.
+    - num_decoders:             Number of decoders. 
+    
+    Returns:
+    - df_cov_per_num_decoders:  Dataframe containing average CoV across point pairs and VAEs.
+    """
+    # loading npy file
+    raw_data = np.load(f"{filename}.npy", allow_pickle=True)
+
+    # converting to pandas dataframes
+    dist_data = raw_data.item()
+    if dist_measure == "geodesic":
+        df_dist = pd.DataFrame(
+            [(k[0], k[1], k[2], k[3], v) for k, v in dist_data.items()],
+            columns=["point1", "point2", "vae_idx", "num_decoders", "distance"]
+            )
+    elif dist_measure == "euclidean":
+        df_dist = pd.DataFrame(
+            [(k[0], k[1], k[2], v) for k, v in dist_data.items()],
+            columns=["point1", "point2", "vae_idx", "distance"]
+        )
+        # Repeat rows for all possible values of num_decoders
+        df_dist = df_dist.loc[df_dist.index.repeat(num_decoders)].copy()
+        df_dist["num_decoders"] = np.tile(np.arange(1, num_decoders + 1), len(df_dist) // num_decoders)
+    else:
+        ValueError("dist_measure argument must be either 'euclidean' or 'geodesic'")
+
+    # computing mean (mu) and standard deviation (sigma) across VAEs for each number of decoders and point pair
+    df_grouped = (
+        df_dist
+        .groupby(["point1", "point2", "num_decoders"])["distance"]
+        .agg(
+            mu="mean",
+            sigma=lambda x: x.std(ddof=0)   # pandas uses sample standard deviation (divides by N-1 instead of N)
+        ).reset_index()
+    )
+
+    # computing cov per point pair
+    df_grouped["cov"] = df_grouped["sigma"] / df_grouped["mu"]
+
+    # average cov across point pairs for each number of decoders
+    df_cov_per_num_decoders = (
+        df_grouped
+        .groupby(["num_decoders"])["cov"]
+        .agg(avg_cov="mean")
+        .reset_index()
+    )
+
+    return df_cov_per_num_decoders
 
 
 def load_data(num_train_data, num_classes):
@@ -694,7 +718,7 @@ if __name__ == "__main__":
 
         model = get_VAE_model()
 
-        model.load_state_dict(torch.load(experiment_folder + f"/{model_name}.pt"))
+        model.load_state_dict(torch.load(experiment_folder + f"/{model_name}_2.pt"))
         model.eval()
         if M > 2:
             raise NotImplementedError("Do not use more than two latent dimensions for this assignment")
@@ -742,14 +766,31 @@ if __name__ == "__main__":
                     c = PLcurve(z1, z2, N=args.num_t, device=device, init_noise=0)
                     connecting_geodesic(model, c, lr=1e-4, steps=10000, num_decoders=d+1, mcmc_samples=30)
                     distance = c.distance().item()
-                    point_pairs_distances[(rd_idx_1, rd_idx_2, rerun, d)] = distance
+                    point_pairs_distances[(rd_idx_1, rd_idx_2, rerun, d+1)] = distance   # d+1 to obtain number of decoders instead of index
 
                 # Calculate Euclidean distances
                 euclidean_distance = torch.norm(z1 - z2).item()
-                point_pairs_distances_euclidian[(rd_idx_1, rd_idx_2, rerun)] = euclidean_distance
+                point_pairs_distances_euclidian[(rd_idx_1, rd_idx_2, rerun)] = euclidean_distance   
 
         np.save("point_pairs_distances.npy", point_pairs_distances)
-        np.save("point_pairs_distances_euclidian.npy", point_pairs_distances_euclidian)
+        np.save("point_pairs_distances_euclidean.npy", point_pairs_distances_euclidian)
 
         print("Finished calculating distances.")
-        
+
+        # aggregate raw CoV data from npy files 
+        euclidean_covs = aggregate_cov_data("point_pairs_distances_euclidean", "euclidean", num_decoders)
+        geodesic_covs = aggregate_cov_data("point_pairs_distances", "geodesic", num_decoders)
+
+        # plotting CoVs in line chart
+        plt.figure()
+        plt.plot(euclidean_covs["num_decoders"], euclidean_covs["avg_cov"], label="Euclidean distance")
+        plt.plot(geodesic_covs["num_decoders"], geodesic_covs["avg_cov"], label="Geodesic distance")
+        plt.xticks(geodesic_covs["num_decoders"])
+        plt.xlabel("Number of decoders")
+        plt.ylabel("Coefficient of Variation")
+        plt.legend()
+
+        # saving plot as png
+        filename = f"cov_plot_{num_decoders}_decoders.png"
+        plt.savefig(filename, dpi=300, bbox_inches="tight")
+        print(f"Saved CoV plot as {filename}")
