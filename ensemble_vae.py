@@ -11,9 +11,8 @@ import torch.optim as optim
 import torch.distributions as td
 import torch.utils.data
 from tqdm import tqdm
-from copy import deepcopy
 import os
-import math
+
 import matplotlib.pyplot as plt
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
@@ -269,7 +268,7 @@ class PLcurve:
         return c
 
     def plot(self):
-        c = self.points().detach().numpy()
+        c = self.points().detach().cpu().numpy()
         plt.plot(c[:,0], c[:,1], color='k', alpha=0.6)
 
 
@@ -372,8 +371,8 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
 
     for i in tqdm(range(num_curves)):
         rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1,i]
-        x0 = torch.tensor(latent_vars[rd_idx_1,:])
-        x1 = torch.tensor(latent_vars[rd_idx_2,:])
+        x0 = torch.tensor(latent_vars[rd_idx_1,:]).to(device)
+        x1 = torch.tensor(latent_vars[rd_idx_2,:]).to(device)
 
         c = PLcurve(x0, x1, 100)
         
