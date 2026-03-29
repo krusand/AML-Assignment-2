@@ -119,6 +119,7 @@ class VAE(nn.Module):
         self.decoder = decoder
         self.encoder = encoder
         self.num_decoders = num_decoders
+
     def elbo(self, x):
         """
         Compute the ELBO for the given batch of data.
@@ -151,8 +152,13 @@ class VAE(nn.Module):
         n_samples: [int]
            Number of samples to generate.
         """
-        z = self.prior().sample(torch.Size([n_samples]))
-        return self.decoder(z).sample()
+        if isinstance(self.decoder, GaussianDecoderEnsemble):
+            idx = np.random.choice(self.num_decoders, size=1)[0]
+            z = self.prior().sample(torch.Size([n_samples]))
+            return self.decoder(z, idx).sample()
+        else:
+            z = self.prior().sample(torch.Size([n_samples]))
+            return self.decoder(z).sample()
 
     def forward(self, x):
         """
