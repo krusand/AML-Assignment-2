@@ -94,7 +94,7 @@ class GaussianDecoder(nn.Module):
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
         means = self.decoder_net(z)
-        return td.Independent(td.Normal(loc=means, scale=1e-3), 3)
+        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
 
 
 
@@ -201,7 +201,7 @@ class GaussianDecoderEnsemble(nn.Module):
             decoder_net = self.decoder_nets[idx]
         means = decoder_net(z)
         
-        return td.Independent(td.Normal(loc=means, scale=1e-3), 3)
+        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
 
 
 def train(model, optimizer, data_loader, epochs, device):
@@ -457,6 +457,12 @@ def get_VAE_model(num_decoders):
 
     return model
 
+def subsample(data, targets, num_data, num_classes):
+    idx = targets < num_classes
+    new_data = data[idx][:num_data].unsqueeze(1).to(torch.float32) / 255
+    new_targets = targets[idx][:num_data]
+
+    return torch.utils.data.TensorDataset(new_data, new_targets)
 
 def load_data(num_train_data, num_classes):
     train_tensors = datasets.MNIST(
