@@ -258,7 +258,7 @@ class PLcurve:
         self.x1 = x1.reshape(1,-1) # 1xD
         self.N = N
 
-        t = torch.linspace(0, 1, N).reshape(N,1) # Nx1
+        t = torch.linspace(0, 1, N).to(device).reshape(N,1) # Nx1
         c = (1-t) @ self.x0 + t @ self.x1 # NxD # Parametrisation of linear line
         self.params = c[1:-1] # (N-2)xD # Parameters between points are free to optimize, but in the ends not
         self.params.requires_grad = True
