@@ -270,7 +270,7 @@ class PLcurve:
 
     def plot(self):
         c = self.points().detach().numpy()
-        plt.plot(c[:,0], c[:,1], color='k', alpha=0.2)
+        plt.plot(c[:,0], c[:,1], color='k', alpha=0.6)
 
 
 
@@ -284,10 +284,16 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
             dim=0
         )  # (M, N, 1, 28, 28)
 
-        delta = decoded_means[:, 1:] - decoded_means[:, :-1]
-        seg_energy = delta.pow(2).flatten(start_dim=2).sum(dim=2)  # (M, N-1)
+        dec1 = (decoded_means[:, 1:]).unsqueeze(1)
+        dec2 = (decoded_means[:, :-1]).unsqueeze(0)
 
-        return seg_energy.mean(dim=0).sum()
+        
+
+        delta = dec1 - dec2
+        seg_energy = delta.pow(2).flatten(start_dim=3).sum(dim=3)  # Shape: (M, M, N-1)
+        seg_energy = seg_energy.mean(dim=(0, 1)).sum()
+
+        return seg_energy
                
     else:             
         mean_x = model.decoder(z).mean     # (N, 1, 28, 28)
