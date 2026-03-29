@@ -94,7 +94,7 @@ class GaussianDecoder(nn.Module):
            A tensor of dimension `(batch_size, M)`, where M is the dimension of the latent space.
         """
         means = self.decoder_net(z)
-        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
+        return td.Independent(td.Normal(loc=means, scale=1e-3), 3)
 
 
 
@@ -201,7 +201,7 @@ class GaussianDecoderEnsemble(nn.Module):
             decoder_net = self.decoder_nets[idx]
         means = decoder_net(z)
         
-        return td.Independent(td.Normal(loc=means, scale=1e-1), 3)
+        return td.Independent(td.Normal(loc=means, scale=1e-3), 3)
 
 
 def train(model, optimizer, data_loader, epochs, device):
@@ -277,9 +277,7 @@ class PLcurve:
         c = self.points().detach().cpu().numpy()
         plt.plot(c[:,0], c[:,1], color='k', alpha=0.6)
 
-
-
-def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
+def curve_energy(model, curve, num_decoders=None):
     z = curve.points().to(device) 
     if isinstance(model.decoder, GaussianDecoderEnsemble):
         M = num_decoders if num_decoders is not None else model.num_decoders
@@ -291,8 +289,6 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
 
         dec1 = (decoded_means[:, 1:]).unsqueeze(1)
         dec2 = (decoded_means[:, :-1]).unsqueeze(0)
-
-        
 
         delta = dec1 - dec2
         seg_energy = delta.pow(2).flatten(start_dim=3).sum(dim=3)  # Shape: (M, M, N-1)
@@ -308,22 +304,21 @@ def curve_energy(model, curve, num_decoders=None, mcmc_samples=30):
 
     return segment_energy.sum()
 
+def connecting_geodesic(model, curve, lr=1e-3, steps=2000, num_decoders=None):
 
-def connecting_geodesic(model, curve, num_decoders=None):
     opt = optim.LBFGS([curve.params]
-                      , lr=1e-2
-                      , max_iter=2000
+                      , lr=lr
+                      , max_iter=steps
                       , line_search_fn='strong_wolfe')
-
+    
     def closure():
         opt.zero_grad()
-        energy = curve_energy(model, curve, num_decoders=num_decoders if num_decoders is not None else model.num_decoders)
+        energy = curve_energy(model, curve, num_decoders=num_decoders)
         energy.backward()
         return energy
-
+        
     opt.zero_grad()
     opt.step(closure)
-
 
 
 def encode_data_to_latent_space(model, mnist_data_loader):
@@ -412,6 +407,37 @@ def plot_latent_pixel_uncertainty(model, latent_vars):
     heatmap = plt.contourf(zz1, zz2, stddev_means_grid, levels=100, cmap='viridis', alpha=0.5)
     cbar = plt.colorbar(heatmap)
     cbar.set_label('Standard deviation of pixel values')
+
+def new_encoder():
+    encoder_net = nn.Sequential(
+        nn.Conv2d(1, 16, 3, stride=2, padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(16),
+        nn.Conv2d(16, 32, 3, stride=2, padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.Conv2d(32, 32, 3, stride=2, padding=1),
+        nn.Flatten(),
+        nn.Linear(512, 2 * M),
+    )
+    return encoder_net
+
+def new_decoder():
+    decoder_net = nn.Sequential(
+        nn.Linear(M, 512),
+        nn.Unflatten(-1, (32, 4, 4)),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.ConvTranspose2d(32, 32, 3, stride=2, padding=1, output_padding=0),
+        nn.Softmax(),
+        nn.BatchNorm2d(32),
+        nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
+        nn.Softmax(),
+        nn.BatchNorm2d(16),
+        nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
+    )
+    return decoder_net
+
 
 def get_VAE_model(num_decoders):
     if num_decoders > 1:
@@ -558,35 +584,6 @@ if __name__ == "__main__":
     # Define prior distribution
     M = args.latent_dim
 
-    def new_encoder():
-        encoder_net = nn.Sequential(
-            nn.Conv2d(1, 16, 3, stride=2, padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(16),
-            nn.Conv2d(16, 32, 3, stride=2, padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.Conv2d(32, 32, 3, stride=2, padding=1),
-            nn.Flatten(),
-            nn.Linear(512, 2 * M),
-        )
-        return encoder_net
-
-    def new_decoder():
-        decoder_net = nn.Sequential(
-            nn.Linear(M, 512),
-            nn.Unflatten(-1, (32, 4, 4)),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.ConvTranspose2d(32, 32, 3, stride=2, padding=1, output_padding=0),
-            nn.Softmax(),
-            nn.BatchNorm2d(32),
-            nn.ConvTranspose2d(32, 16, 3, stride=2, padding=1, output_padding=1),
-            nn.Softmax(),
-            nn.BatchNorm2d(16),
-            nn.ConvTranspose2d(16, 1, 3, stride=2, padding=1, output_padding=1),
-        )
-        return decoder_net
 
     # Choose mode to run
     if args.mode == "train":
