@@ -276,7 +276,7 @@ class PLcurve:
 
     def plot(self):
         c = self.points().detach().cpu().numpy()
-        plt.plot(c[:,0], c[:,1], color='k', alpha=0.6)
+        plt.plot(c[:,0], c[:,1], color='k', alpha=0.4)
 
 def curve_energy(model, curve, num_decoders=None):
     z = curve.points().to(device) 
@@ -363,12 +363,12 @@ def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png
     if curve is not None:
         curve.plot()
     if save:
-        plt.savefig("latent_space_" + plot_name)
+        plt.savefig(f"{experiment_folder}/latent_space_" + plot_name)
 
 def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
     # sample 2*num_curves random points
     
-    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=False)
+    rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=True)
     rd_points = rd_points.reshape(2, num_curves)
 
     for i in tqdm(range(num_curves)):
@@ -376,10 +376,13 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
         x0 = torch.tensor(latent_vars[rd_idx_1,:]).to(device)
         x1 = torch.tensor(latent_vars[rd_idx_2,:]).to(device)
 
-        c = PLcurve(x0, x1, 100)
+        c = PLcurve(x0, x1, 50)
         
         connecting_geodesic(model, c, num_decoders=num_decoders)
-        c.plot() 
+        c.plot()
+        if i % 5 == 0:
+            plt.savefig(f"{args.experiment_folder}/geodesics_{i+1}_curves.png")
+
 
 def plot_latent_pixel_uncertainty(model, latent_vars):
     n_grid_points = 100
@@ -708,9 +711,9 @@ if __name__ == "__main__":
         print("Print mean test elbo:", mean_elbo)
 
     elif args.mode == "geodesics":
-
+        rerun = 0
         model = get_VAE_model(args.num_decoders)
-        model.load_state_dict(torch.load(args.experiment_folder + "/model_0.pt"))
+        model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}.pt"))
         model.eval()
 
         if M > 2:
@@ -724,7 +727,7 @@ if __name__ == "__main__":
         plot_latent_curves(model, latent_vars, args.num_curves, num_decoders=args.num_decoders)
         
         plt.tight_layout()
-        plt.savefig(f"{args.experiment_folder}/geodesics_{args.num_curves}_curves.png")
+        plt.savefig(f"{args.experiment_folder}/geodesics_{args.num_curves}_curves_rerun_{rerun}.png")
 
     elif args.mode == "cov":
 
