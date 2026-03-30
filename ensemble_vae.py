@@ -277,6 +277,12 @@ class PLcurve:
     def plot(self):
         c = self.points().detach().cpu().numpy()
         plt.plot(c[:,0], c[:,1], color='k', alpha=0.4)
+    
+    def distance(self):
+        c = self.points() # NxD
+        delta = c[1:] - c[:-1] # (N-1)xD
+        segment_lengths = torch.norm(delta, dim=1) # (N-1)
+        return segment_lengths.sum()
 
 def curve_energy(model, curve, num_decoders=None):
     z = curve.points().to(device) 
@@ -744,7 +750,7 @@ if __name__ == "__main__":
             print(f"Randomly selected point pair indices: {rd_idx_1}, {rd_idx_2}")
             for rerun in range(args.num_reruns):
                 os.makedirs(f"{experiment_folder}", exist_ok=True)
-                model = get_VAE_model()
+                model = get_VAE_model(args.num_decoders)
 
                 model.load_state_dict(torch.load(f"{experiment_folder}/{model_name}_{rerun}.pt"))
 
@@ -755,11 +761,11 @@ if __name__ == "__main__":
 
                 for d in range(model.num_decoders):
                     # curve between latent
-                    z1 = torch.tensor(latent_vars[rd_idx_1, :], dtype=torch.float32)
-                    z2 = torch.tensor(latent_vars[rd_idx_2, :], dtype=torch.float32)
-                    c = PLcurve(z1, z2, N=args.num_t, device=device, init_noise=0)
-                    connecting_geodesic(model, c, lr=1e-4, steps=10000, num_decoders=d+1, mcmc_samples=30)
-                    distance = c.distance().item()
+                    z1 = torch.tensor(latent_vars[rd_idx_1, :], dtype=torch.float32).to(device)
+                    z2 = torch.tensor(latent_vars[rd_idx_2, :], dtype=torch.float32).to(device)
+                    c = PLcurve(z1, z2, N=50)
+                    connecting_geodesic(model, c, lr=1e-4, steps=10000, num_decoders=d+1)
+                    distance = torch.sqrt(curve_energy(model, c, num_decoders=d+1)).item()  # d+1 to obtain number of decoders instead of index
                     point_pairs_distances[(rd_idx_1, rd_idx_2, rerun, d+1)] = distance   # d+1 to obtain number of decoders instead of index
 
                 # Calculate Euclidean distances
