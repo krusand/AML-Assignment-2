@@ -315,7 +315,7 @@ def curve_energy(model, curve, num_decoders=None):
 
     return segment_energy.sum()
 
-def connecting_geodesic(model, curve, lr=1e-2, steps=10000, num_decoders=None):
+def connecting_geodesic(model, curve: PLcurve, lr=1e-2, steps=10000, num_decoders=None):
     # Keep learning rate semi high. Line search auto adjusts it
 
     opt = optim.LBFGS([curve.params]
@@ -327,9 +327,19 @@ def connecting_geodesic(model, curve, lr=1e-2, steps=10000, num_decoders=None):
         energy = curve_energy(model, curve, num_decoders=num_decoders)
         energy.backward()
         return energy
+    
+    start_energy = closure()
+    start_distance = curve.distance()
 
     opt.zero_grad()
     opt.step(closure)
+
+    final_energy = closure()
+    final_distance = curve.distance()
+
+    print("start -> end")
+    print(f"Curve energy: {start_energy} -> {final_energy}")
+    print(f"Curve distance: {start_distance} -> {final_distance}")
 
 
 def encode_data_to_latent_space(model, mnist_data_loader):
@@ -377,7 +387,7 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
     # sample 2*num_curves random points
     np.random.seed(0)
     rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=True)
-    rd_points = rd_points.reshape(2, num_curves)
+    rd_points = rd_points.reshape(num_curves,2)
 
     colors = list(mcolors.CSS4_COLORS.keys())
     colors.append("k")
@@ -387,7 +397,10 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
         color_idx = color_idxs[i]
         color = colors[color_idx]
 
-        rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1,i]
+        rd_idx_1, rd_idx_2 = rd_points[i, 0], rd_points[i, 1]
+        print(f"\nIdxs, from -> to:")
+        print(f"{rd_idx_1} -> {rd_idx_2}")
+
         x0 = torch.tensor(latent_vars[rd_idx_1,:]).to(device)
         x1 = torch.tensor(latent_vars[rd_idx_2,:]).to(device)
 
@@ -738,7 +751,7 @@ if __name__ == "__main__":
         print("Print mean test elbo:", mean_elbo)
 
     elif args.mode == "geodesics":
-        rerun = 2
+        rerun = 0
         model = get_VAE_model(args.num_decoders)
         model.load_state_dict(torch.load(args.experiment_folder + f"/model_{rerun}.pt"))
         model.eval()
