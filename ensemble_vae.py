@@ -14,6 +14,7 @@ from tqdm import tqdm
 import os
 
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
 import numpy as np
@@ -274,9 +275,9 @@ class PLcurve:
         c = torch.concatenate((self.x0, self.params, self.x1), axis=0) # NxD
         return c
 
-    def plot(self):
+    def plot(self, color, linestyle='-', alpha=0.6):
         c = self.points().detach().cpu().numpy()
-        plt.plot(c[:,0], c[:,1], color='k', alpha=0.4)
+        plt.plot(c[:,0], c[:,1], color=color, linestyle=linestyle,alpha=alpha)
     
     def distance(self):
         c = self.points() # NxD
@@ -311,19 +312,19 @@ def curve_energy(model, curve, num_decoders=None):
 
     return segment_energy.sum()
 
-def connecting_geodesic(model, curve, lr=1e-3, steps=2000, num_decoders=None):
+def connecting_geodesic(model, curve, lr=1e-2, steps=10000, num_decoders=None):
+    # Keep learning rate semi high. Line search auto adjusts it
 
     opt = optim.LBFGS([curve.params]
                       , lr=lr
                       , max_iter=steps
                       , line_search_fn='strong_wolfe')
-    
     def closure():
         opt.zero_grad()
         energy = curve_energy(model, curve, num_decoders=num_decoders)
         energy.backward()
         return energy
-        
+
     opt.zero_grad()
     opt.step(closure)
 
@@ -373,19 +374,29 @@ def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png
 
 def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
     # sample 2*num_curves random points
-    
+    np.random.seed(0)
     rd_points = np.random.choice(a=latent_vars.shape[0], size=num_curves*2,replace=True)
     rd_points = rd_points.reshape(2, num_curves)
 
+    colors = list(mcolors.CSS4_COLORS.keys())
+    color_idxs = np.random.choice(a=len(colors), size=num_curves, replace=False)
+
     for i in tqdm(range(num_curves)):
+        color_idx = color_idxs[i]
+        color = colors[color_idx]
+
         rd_idx_1, rd_idx_2 = rd_points[0, i], rd_points[1,i]
         x0 = torch.tensor(latent_vars[rd_idx_1,:]).to(device)
         x1 = torch.tensor(latent_vars[rd_idx_2,:]).to(device)
 
-        c = PLcurve(x0, x1, 50)
+        c = PLcurve(x0, x1, 100)
         
-        connecting_geodesic(model, c, num_decoders=num_decoders)
-        c.plot()
+        # Euclidean curve
+        c.plot(color=color, linestyle='dotted', alpha=1)
+
+        # Latent curve
+        connecting_geodesic(model, c, num_decoders= num_decoders)
+        c.plot(color=color, linestyle='-', alpha=1)
         if i % 5 == 0:
             plt.savefig(f"{args.experiment_folder}/geodesics_{i+1}_curves_{rerun}.png")
 
