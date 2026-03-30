@@ -275,9 +275,12 @@ class PLcurve:
         c = torch.concatenate((self.x0, self.params, self.x1), axis=0) # NxD
         return c
 
-    def plot(self, color, linestyle='-', alpha=0.6):
+    def plot(self, color, linestyle='-', alpha=0.6, label=None):
         c = self.points().detach().cpu().numpy()
-        plt.plot(c[:,0], c[:,1], color=color, linestyle=linestyle,alpha=alpha)
+        if label is None:
+            plt.plot(c[:,0], c[:,1], color=color, linestyle=linestyle, alpha=alpha)
+        else:
+            plt.plot(c[:,0], c[:,1], color=color, linestyle=linestyle, alpha=alpha, label=label)
     
     def distance(self):
         c = self.points() # NxD
@@ -365,8 +368,6 @@ def encode_data_to_latent_space(model, mnist_data_loader):
 def plot_latent_space(latent_vars, ys, curve=None, save=False, plot_name = '.png'):
     plt.figure(figsize=(16, 12))
     scatter = plt.scatter(latent_vars[:, 0], latent_vars[:, 1], c=ys, alpha=0.6, cmap="tab10")
-    handles, labels = scatter.legend_elements(prop="colors", alpha=0.6)
-    legend = plt.legend(handles, range(10), title="Class Label")
     if curve is not None:
         curve.plot()
     if save:
@@ -379,8 +380,9 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
     rd_points = rd_points.reshape(2, num_curves)
 
     colors = list(mcolors.CSS4_COLORS.keys())
-    color_idxs = np.random.choice(a=len(colors), size=num_curves, replace=False)
-
+    colors.append("k")
+    color_idxs = np.random.choice(a=len(colors), size=num_curves-1, replace=False).tolist()
+    color_idxs.append(-1)
     for i in tqdm(range(num_curves)):
         color_idx = color_idxs[i]
         color = colors[color_idx]
@@ -390,15 +392,23 @@ def plot_latent_curves(model, latent_vars, num_curves, num_decoders=None):
         x1 = torch.tensor(latent_vars[rd_idx_2,:]).to(device)
 
         c = PLcurve(x0, x1, 100)
-        
-        # Euclidean curve
-        c.plot(color=color, linestyle='dotted', alpha=1)
+        if i == num_curves-1: # Plot the legend on the last one to only have one pair of lines
+            # Euclidean curve
+            c.plot(color=color, linestyle='dotted', alpha=1, label='Straight line')
 
-        # Latent curve
-        connecting_geodesic(model, c, num_decoders= num_decoders)
-        c.plot(color=color, linestyle='-', alpha=1)
-        if i % 5 == 0:
-            plt.savefig(f"{args.experiment_folder}/geodesics_{i+1}_curves_{rerun}.png")
+            # Latent curve
+            connecting_geodesic(model, c, num_decoders= num_decoders)
+            c.plot(color=color, linestyle='-', alpha=1, label='Pullback geodesic')
+
+            plt.legend()
+        else:
+            # Euclidean curve
+            c.plot(color=color, linestyle='dotted', alpha=1)
+
+            # Latent curve
+            connecting_geodesic(model, c, num_decoders= num_decoders)
+            c.plot(color=color, linestyle='-', alpha=1)
+
 
 
 def plot_latent_pixel_uncertainty(model, latent_vars):
